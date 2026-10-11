@@ -580,33 +580,6 @@ void describe('real Pi reload shell survival', { concurrency: false }, () => {
           }),
         /pi_bg_survive_reload_requires_non_agent/u,
       );
-      const attested = h.session.getToolDefinition('bg_run_pi_attested');
-      assert.ok(attested?.prepareArguments);
-      assert.throws(
-        () =>
-          attested.prepareArguments?.({
-            name: 'Attested refusal',
-            provider: 'openai-codex',
-            model: 'gpt-test',
-            prompt: 'nope',
-            reportPath: 'report.md',
-            surviveReload: true,
-          }),
-        /pi_bg_survive_reload_unsupported_task_kind/u,
-      );
-      const delegate = h.session.getToolDefinition('bg_delegate');
-      assert.ok(delegate?.prepareArguments);
-      assert.throws(
-        () => delegate.prepareArguments?.({ name: 'Delegate refusal', prompt: 'nope', surviveReload: true }),
-        /surviveReload/u,
-      );
-      const fusion = h.session.getToolDefinition('fusion_reason');
-      assert.ok(fusion?.prepareArguments);
-      assert.throws(
-        () => fusion.prepareArguments?.({ objective: 'nope', surviveReload: true }),
-        /surviveReload|unknown|unsupported/u,
-      );
-
       const survivor = taskFrom(
         await execute(h.session, 'bg_run', {
           name: 'Result inapplicable',
@@ -616,10 +589,6 @@ void describe('real Pi reload shell survival', { concurrency: false }, () => {
           notifyOnCompletion: false,
           triggerOnCompletion: false,
         }),
-      );
-      await assert.rejects(
-        () => execute(h.session, 'bg_result', { taskId: survivor.id }),
-        /not a delegate or Fusion task|bg_logs/u,
       );
       const copiedMetadata = JSON.parse(
         await readFile(join(h.cwd, survivor.outputPath.replace(/\.output$/u, '.json')), 'utf8'),

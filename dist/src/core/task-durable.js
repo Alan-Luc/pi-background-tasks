@@ -1,21 +1,13 @@
-import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { replaceFileDurable, writeFileDurable } from './durable-fs.js';
+import { replaceFileDurable } from './durable-fs.js';
 function signalError(signal) {
     const reason = signal.reason;
     return reason instanceof Error
         ? reason
-        : new Error(`Attested Git preflight cancelled${reason === undefined ? '' : `: ${String(reason)}`}`);
+        : new Error(`Background task operation cancelled${reason === undefined ? '' : `: ${String(reason)}`}`);
 }
 function throwIfAborted(signal) {
     if (signal?.aborted === true)
         throw signalError(signal);
-}
-export async function writeFileFsynced(path, data, signal) {
-    throwIfAborted(signal);
-    await mkdir(dirname(path), { recursive: true });
-    throwIfAborted(signal);
-    await writeFileDurable(path, data, signal === undefined ? {} : { signal });
 }
 export async function writeJsonAtomic(path, value, signal) {
     throwIfAborted(signal);

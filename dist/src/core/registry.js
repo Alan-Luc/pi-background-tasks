@@ -1,15 +1,13 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { formatSize } from '@earendil-works/pi-coding-agent';
-import { boundedRead, deriveTaskNameFromCommand, escapeXml, formatAgentActivityLine, formatDuration, isJsonObject, normalizeTaskName, parseAgentActivity, parseJsonText, rejectSurvivalForTaskKind, resolveShellPolicy, sanitizePathSegment, shellInvocationForPolicy, shellPolicySnapshot, shellQuote, snapshot, taskDisplayName, ReloadSurvivalError, } from './common.js';
-import { ATTESTED_GIT_KILL_GRACE_MS, ATTESTED_GIT_MAX_OUTPUT_BYTES, ATTESTED_TASK_ID_PATTERN, } from './attested-pi-contract.js';
-import { closeAndFsyncOutputStream, writeFileFsynced, writeJsonAtomic } from './task-durable.js';
-import { assertWindowsCommandLineWithinLimit, piLaunchArgv, resolvePiLaunch, } from './pi-launch.js';
+import { boundedRead, deriveTaskNameFromCommand, escapeXml, formatAgentActivityLine, formatDuration, isJsonObject, normalizeTaskName, parseAgentActivity, parseJsonText, resolveShellPolicy, sanitizePathSegment, shellInvocationForPolicy, shellPolicySnapshot, shellQuote, snapshot, taskDisplayName, ReloadSurvivalError, } from './common.js';
+import { closeAndFsyncOutputStream, writeJsonAtomic } from './task-durable.js';
+import { resolvePiLaunch } from './pi-launch.js';
 import { BackgroundTaskExtensionServiceClosedError } from './extension-api.js';
-import { resolveAnthropicAttributionExtensionPath } from './anthropic-attribution-path.js';
 import { createReloadableShellExecutionV1, RELOAD_SHELL_OWNER_PROTOCOL, } from './reload-shell-owner.js';
 import { runWindowsTaskkill, } from './windows-taskkill.js';
 export const MAX_OUTPUT_BYTES = Number(process.env['PI_BG_MAX_OUTPUT_BYTES'] ?? 20 * 1024 * 1024);
@@ -39,10 +37,6 @@ export const WIN32_CMD_PI_TELEMETRY_UNAVAILABLE_REASON = 'win32-cmd-cannot-safel
 export const NON_POSIX_SHELL_PI_TELEMETRY_UNAVAILABLE_REASON = 'user-non-posix-shell-cannot-safely-intercept-pi-argv';
 function defaultTaskId() {
     return `b${randomBytes(4).toString('hex')}`;
-}
-function dirNameFromDisplay(path) {
-    const parts = path.split(/[\\/]/);
-    return parts.length >= 2 ? (parts.at(-2) ?? '') : '';
 }
 export function commandMayLaunchPiAgent(command, env = process.env) {
     if (env['PI_BG_DISABLE_PI_TELEMETRY'] === '1')
@@ -497,27 +491,6 @@ function normalizeToolUsage(value) {
 function noopOnChange() {
     return undefined;
 }
-/**
- * Deliver the delegate prompt bytes over stdin.
- *
- * A failure to deliver the seed is loud: the caller terminates the task rather
- * than letting a child run without the context it was supposed to receive.
- */
-function writeDelegateStdin(child, bytes, onError) {
-    const stdin = child.stdin;
-    if (stdin === undefined || stdin === null) {
-        onError(new Error('delegate child stdin pipe is unavailable'));
-        return;
-    }
-    stdin.once('error', onError);
-    stdin.write(bytes, (error) => {
-        if (error !== undefined && error !== null) {
-            onError(error);
-            return;
-        }
-        stdin.end();
-    });
-}
 export class BackgroundTaskRegistry {
     tasks = new Map();
     runtimeDir;
@@ -543,10 +516,6 @@ export class BackgroundTaskRegistry {
     killGraceMs;
     stopWaitMs;
     taskAdmissionTimeoutMs;
-    attestedGitKillGraceMs;
-    attestedGitMaxOutputBytes;
-    attestedGitSpawn;
-    attestedRuntimePromise;
     logger;
     onChange;
     sendCompletionNotification;
@@ -582,9 +551,6 @@ export class BackgroundTaskRegistry {
         this.killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
         this.stopWaitMs = options.stopWaitMs ?? STOP_WAIT_MS;
         this.taskAdmissionTimeoutMs = BackgroundTaskRegistry.positiveTimeout(options.taskAdmissionTimeoutMs, TASK_ADMISSION_TIMEOUT_MS, 'taskAdmissionTimeoutMs');
-        this.attestedGitKillGraceMs = BackgroundTaskRegistry.positiveTimeout(options.attestedGitKillGraceMs, ATTESTED_GIT_KILL_GRACE_MS, 'attestedGitKillGraceMs');
-        this.attestedGitMaxOutputBytes = BackgroundTaskRegistry.positiveTimeout(options.attestedGitMaxOutputBytes, ATTESTED_GIT_MAX_OUTPUT_BYTES, 'attestedGitMaxOutputBytes');
-        this.attestedGitSpawn = options.attestedGitSpawn;
         this.logger = options.logger ?? console;
         this.onChange = options.onChange ?? noopOnChange;
         this.sendCompletionNotification = options.sendCompletionNotification;
@@ -601,14 +567,6 @@ export class BackgroundTaskRegistry {
         const resolved = resolveShellPolicy(this.platform, this.shellPolicyEnv ?? this.env, process.cwd());
         this.shellPolicy = resolved;
         return resolved;
-    }
-    loadAttestedRuntime() {
-        const existing = this.attestedRuntimePromise;
-        if (existing !== undefined)
-            return existing;
-        const loading = import('./attested-pi-run.js');
-        this.attestedRuntimePromise = loading;
-        return loading;
     }
     static positiveTimeout(value, fallback, label) {
         const candidate = value ?? fallback;
@@ -957,19 +915,6 @@ export class BackgroundTaskRegistry {
         if (failures.length > 0) {
             throw new AggregateError(failures, 'Interrupted task admission artifact cleanup failed');
         }
-    }
-    attestedGitOptions(admission) {
-        return {
-            signal: admission?.controller.signal,
-            deadlineAt: admission?.deadlineAt ?? Date.now() + this.taskAdmissionTimeoutMs,
-            killProcess: this.killProcess,
-            killTree: this.killTree,
-            platform: this.platform,
-            env: this.env,
-            killGraceMs: this.attestedGitKillGraceMs,
-            maxOutputBytes: this.attestedGitMaxOutputBytes,
-            ...(this.attestedGitSpawn === undefined ? {} : { spawn: this.attestedGitSpawn }),
-        };
     }
     captureSpawnedChild(task, child) {
         task.child = child;
@@ -1398,648 +1343,6 @@ export class BackgroundTaskRegistry {
             unbindAdmissionCancellation();
         }
     }
-    /**
-     * Track an in-process asynchronous workflow through the same durable task,
-     * notification, status, log, and cancellation surfaces as child processes.
-     * The supplied completion promise must own all workflow cleanup before it
-     * settles; terminal publication happens only after that settlement.
-     */
-    async startManagedTask(ctx, request) {
-        rejectSurvivalForTaskKind(request, 'managed background tasks');
-        let admission;
-        try {
-            admission = this.beginTaskAdmission('a managed background task');
-            return await this.startManagedTaskAdmitted(ctx, request, admission);
-        }
-        catch (error) {
-            const admissionError = admission?.controller.signal.aborted === true
-                ? this.taskAdmissionError(admission)
-                : error instanceof BackgroundTaskAdmissionClosedError
-                    ? error
-                    : undefined;
-            if (admissionError !== undefined) {
-                const task = admission === undefined ? undefined : this.tasks.get(request.id);
-                if (task === undefined) {
-                    try {
-                        request.cancel();
-                    }
-                    catch (cancelError) {
-                        this.logger.error(`[background-tasks] managed preflight cancellation failed for ${request.id}:`, cancelError);
-                    }
-                    // The workflow promise owns child/artifact cleanup. Do not release a
-                    // pre-insertion admission while that cleanup can still run late.
-                    await request.completion.then(() => undefined, () => undefined);
-                }
-                else {
-                    this.stopOwnedTaskAfterAdmissionCancellation(task, admissionError);
-                    await request.completion.then(() => undefined, () => undefined);
-                }
-                if (admission !== undefined) {
-                    throw this.surfacedTaskAdmissionError(admission, error);
-                }
-                throw admissionError;
-            }
-            throw error;
-        }
-        finally {
-            if (admission !== undefined)
-                this.releaseTaskAdmission(admission);
-        }
-    }
-    async startManagedTaskAdmitted(ctx, request, admission) {
-        this.assertTaskAdmissionOpen('a managed background task', admission);
-        if (!/^[a-zA-Z0-9_.-]+$/u.test(request.id))
-            throw new Error(`Managed background task id is invalid: ${request.id}`);
-        if (this.tasks.has(request.id))
-            throw new Error(`Background task id already exists: ${request.id}`);
-        const dir = await this.awaitTaskAdmissionBoundary(this.ensureRuntimeDir(ctx), admission);
-        this.assertTaskAdmissionOpen('a managed background task', admission);
-        const outputAbsPath = join(dir.abs, `${request.id}.output`);
-        const metadataAbsPath = join(dir.abs, `${request.id}.json`);
-        const outputPath = join(dir.display, `${request.id}.output`);
-        const task = {
-            id: request.id,
-            name: normalizeTaskName(request.name) ?? 'Managed background task',
-            command: request.command,
-            description: request.description,
-            status: 'running',
-            outputPath,
-            outputAbsPath,
-            metadataAbsPath,
-            cwd: ctx.cwd,
-            startTime: this.now(),
-            exitCode: undefined,
-            pid: undefined,
-            bytesWritten: 0,
-            isAgent: request.isAgent,
-            surviveReload: false,
-            notified: false,
-            notifyOnCompletion: request.notifyOnCompletion,
-            triggerOnCompletion: request.triggerOnCompletion,
-            fusion: request.fusion,
-            managedCancel: request.cancel,
-            managedStopWaitMs: request.stopWaitMs,
-            terminalPublished: false,
-            terminalPublicationState: 'pending',
-            terminalPublishAttempts: 0,
-            terminalPublicationGate: request.terminalPublicationGate,
-            waiters: [],
-        };
-        this.assertTaskAdmissionOpen('a managed background task', admission);
-        this.tasks.set(task.id, task);
-        const stream = createWriteStream(outputAbsPath, { flags: 'a', encoding: 'utf8' });
-        task.stream = stream;
-        stream.on('error', (error) => {
-            task.error = `Output file write failed: ${error.message}`;
-            if (task.status === 'running' && !task.managedCancelRequested) {
-                task.managedCancelRequested = true;
-                try {
-                    request.cancel();
-                }
-                catch (cancelError) {
-                    task.error = `${task.error}; cancellation failed: ${BackgroundTaskRegistry.errorMessage(cancelError)}`;
-                }
-            }
-        });
-        const unbindAdmissionCancellation = this.bindOwnedTaskToAdmission(task, admission);
-        let completionAttached = false;
-        const attachCompletion = () => {
-            if (completionAttached)
-                return;
-            completionAttached = true;
-            void request.completion
-                .then(() => {
-                const killed = task.killKind === 'user' || task.killKind === 'shutdown';
-                const timedOut = task.killKind === 'timeout';
-                return this.finalizeTask(task, killed ? 'killed' : timedOut ? 'failed' : 'completed', killed || timedOut ? null : 0, undefined, timedOut ? task.error : undefined);
-            }, (error) => {
-                const message = BackgroundTaskRegistry.errorMessage(error);
-                const killed = task.killKind === 'user' || task.killKind === 'shutdown';
-                return this.finalizeTask(task, killed ? 'killed' : 'failed', null, undefined, message);
-            })
-                .catch((error) => {
-                this.logger.error(`[background-tasks] managed task finalization failed for ${task.id}:`, error);
-            });
-        };
-        try {
-            await this.awaitTaskAdmissionBoundary(this.writeMetadata(task, admission.controller.signal), admission);
-            attachCompletion();
-            this.assertTaskAdmissionOpen('a managed background task', admission);
-            this.onChange();
-        }
-        catch (error) {
-            if (admission.controller.signal.aborted) {
-                attachCompletion();
-                throw this.surfacedTaskAdmissionError(admission, error);
-            }
-            this.tasks.delete(task.id);
-            await this.destroyTaskStream(task);
-            try {
-                request.cancel();
-            }
-            catch (cancelError) {
-                this.logger.error(`[background-tasks] managed task cancellation after metadata failure also failed for ${task.id}:`, cancelError);
-            }
-            await request.completion.then(() => undefined, () => undefined);
-            throw new Error(`Failed to register managed background task: ${BackgroundTaskRegistry.errorMessage(error)}`);
-        }
-        finally {
-            unbindAdmissionCancellation();
-        }
-        return task;
-    }
-    async updateManagedTask(task, state, line) {
-        if (task.status !== 'running' || task.fusion === undefined)
-            return;
-        task.fusion.state = state;
-        if (line !== undefined && line.length > 0)
-            this.writeNotice(task, `${line}\n`);
-        await this.writeMetadata(task);
-        this.onChange();
-    }
-    /** Claim deferred Fusion usage exactly once before returning it from bg_result. */
-    async claimFusionUsage(task) {
-        if (task.fusion === undefined)
-            throw new Error(`Task ${task.id} is not a Fusion task`);
-        let claimed = false;
-        const write = async () => {
-            if (!task.fusion || task.fusion.usageDelivered)
-                return;
-            task.fusion.usageDelivered = true;
-            await writeJsonAtomic(task.metadataAbsPath, snapshot(task));
-            claimed = true;
-        };
-        const previous = task.metadataWriteChain ?? Promise.resolve();
-        const next = previous.then(write, write);
-        task.metadataWriteChain = next.catch(() => undefined);
-        await next;
-        return claimed;
-    }
-    /**
-     * Start a prepared delegate child.
-     *
-     * The caller has already completed preflight, so by the time this runs the
-     * seed, budget plan, and artifact directory exist and the argv is fixed. The
-     * child is launched directly, never through a shell, and its terminal state
-     * flows through the same durable notification path as `bg_run`.
-     */
-    async startDelegateTask(ctx, request) {
-        rejectSurvivalForTaskKind(request, 'delegate tasks');
-        const admission = this.beginTaskAdmission('a delegate task');
-        try {
-            return await this.startDelegateTaskAdmitted(ctx, request, admission);
-        }
-        finally {
-            this.releaseTaskAdmission(admission);
-        }
-    }
-    async startDelegateTaskAdmitted(ctx, request, admission) {
-        this.assertTaskAdmissionOpen('a delegate task', admission);
-        const launch = resolvePiLaunch({ platform: this.platform });
-        assertWindowsCommandLineWithinLimit(launch, request.argv, this.platform, 'bg-delegate');
-        const dir = await this.awaitTaskAdmissionBoundary(this.ensureRuntimeDir(ctx), admission);
-        this.assertTaskAdmissionOpen('a delegate task', admission);
-        const id = request.facts.taskId;
-        const outputAbsPath = join(dir.abs, `${id}.output`);
-        const metadataAbsPath = join(dir.abs, `${id}.json`);
-        const outputPath = join(dir.display, `${id}.output`);
-        const task = {
-            id,
-            name: normalizeTaskName(request.name) ?? 'Delegate task',
-            command: ['pi', ...request.argv].map(shellQuote).join(' '),
-            status: 'running',
-            outputPath,
-            outputAbsPath,
-            metadataAbsPath,
-            cwd: ctx.cwd,
-            startTime: this.now(),
-            exitCode: undefined,
-            pid: undefined,
-            bytesWritten: 0,
-            isAgent: true,
-            surviveReload: false,
-            notified: false,
-            notifyOnCompletion: request.notifyOnCompletion,
-            triggerOnCompletion: request.triggerOnCompletion,
-            timeoutSeconds: request.timeoutSeconds,
-            model: request.facts.route.qualifiedId,
-            delegate: request.facts,
-            terminalPublished: false,
-            terminalPublicationState: 'pending',
-            terminalPublishAttempts: 0,
-            waiters: [],
-        };
-        this.assertTaskAdmissionOpen('a delegate task', admission);
-        this.tasks.set(id, task);
-        const stream = createWriteStream(outputAbsPath, { flags: 'a', encoding: 'utf8' });
-        task.stream = stream;
-        stream.on('error', (error) => {
-            task.error = `Output file write failed: ${error.message}`;
-        });
-        let unbindAdmissionCancellation = () => undefined;
-        try {
-            this.assertTaskAdmissionOpen('a delegate task', admission);
-            const child = this.spawn(launch.executable, piLaunchArgv(launch, [...request.argv]), {
-                cwd: ctx.cwd,
-                detached: this.platform !== 'win32',
-                shell: false,
-                // The seed travels over stdin, never as a shell or positional argument,
-                // so the bytes the child reads are exactly the bytes that were persisted
-                // and hashed, with no quoting or command-line length limit in the path.
-                stdio: ['pipe', 'pipe', 'pipe'],
-                env: request.env,
-                windowsHide: true,
-            });
-            this.captureSpawnedChild(task, child);
-            child.stdout?.on('data', (data) => {
-                this.appendChildOutput(task, data, 'stdout');
-            });
-            child.stderr?.on('data', (data) => {
-                this.appendChildOutput(task, data, 'stderr');
-            });
-            child.on('error', (error) => {
-                this.writeNotice(task, `\n[delegate spawn error: ${error.message}]\n`);
-                void this.finalizeTask(task, 'failed', null, undefined, error.message);
-            });
-            child.on('close', (code, signalName) => {
-                let status;
-                let error;
-                if (task.killKind === 'user' || task.killKind === 'shutdown') {
-                    status = 'killed';
-                }
-                else if (task.killKind === 'timeout') {
-                    status = 'failed';
-                    error = task.error ?? `Timed out after ${String(request.timeoutSeconds ?? 0)}s`;
-                }
-                else if ((code ?? 0) === 0) {
-                    status = 'completed';
-                }
-                else {
-                    status = 'failed';
-                    error = `Exited with code ${code === null ? 'null' : String(code)}${signalName ? ` (${signalName})` : ''}`;
-                }
-                void this.finalizeTask(task, status, code, signalName, error);
-            });
-            if (request.timeoutSeconds !== undefined) {
-                task.timeoutHandle = setTimeout(() => {
-                    if (task.status !== 'running')
-                        return;
-                    task.killKind = 'timeout';
-                    task.error = `Timed out after ${String(request.timeoutSeconds)}s`;
-                    this.writeNotice(task, `\n[delegate timeout: ${task.error}]\n`);
-                    try {
-                        this.requestKill(task, 'SIGTERM');
-                    }
-                    catch (error) {
-                        void this.finalizeTask(task, 'failed', null, undefined, `${task.error}; kill failed: ${error instanceof Error ? error.message : String(error)}`);
-                    }
-                }, request.timeoutSeconds * 1000);
-            }
-            unbindAdmissionCancellation = this.bindOwnedTaskToAdmission(task, admission);
-            this.assertTaskAdmissionOpen('a delegate task', admission);
-            writeDelegateStdin(child, request.stdinBytes, (error) => {
-                this.writeNotice(task, `\n[delegate stdin write failed: ${error.message}]\n`);
-                if (task.status === 'running') {
-                    task.killKind = 'user';
-                    task.error = `Delegate seed could not be delivered: ${error.message}`;
-                    try {
-                        this.requestKill(task, 'SIGTERM');
-                    }
-                    catch {
-                        void this.finalizeTask(task, 'failed', null, undefined, task.error);
-                    }
-                }
-            });
-            await this.awaitTaskAdmissionBoundary(this.writeMetadata(task, admission.controller.signal), admission);
-            this.assertTaskAdmissionOpen('a delegate task', admission);
-            this.onChange();
-            return task;
-        }
-        catch (error) {
-            if (admission.controller.signal.aborted) {
-                const admissionError = this.taskAdmissionError(admission);
-                let cleanupError;
-                if (task.child === undefined) {
-                    try {
-                        await this.discardUnspawnedTask(task, [outputAbsPath, metadataAbsPath]);
-                    }
-                    catch (cleanupFailure) {
-                        cleanupError = cleanupFailure;
-                    }
-                }
-                else {
-                    this.stopOwnedTaskAfterAdmissionCancellation(task, admissionError);
-                }
-                throw this.surfacedTaskAdmissionError(admission, error, cleanupError);
-            }
-            const message = error instanceof Error ? error.message : String(error);
-            this.writeNotice(task, `\n[delegate spawn exception: ${message}]\n`);
-            await this.finalizeTask(task, 'failed', null, undefined, message);
-            throw new Error(`Failed to start delegate task: ${message}`);
-        }
-        finally {
-            unbindAdmissionCancellation();
-        }
-    }
-    async startAttestedPiTask(ctx, request) {
-        rejectSurvivalForTaskKind(request, 'attested Pi tasks');
-        const admission = this.beginTaskAdmission('an attested Pi task');
-        try {
-            return await this.startAttestedPiTaskAdmitted(ctx, request, admission);
-        }
-        finally {
-            this.releaseTaskAdmission(admission);
-        }
-    }
-    async startAttestedPiTaskAdmitted(ctx, request, admission) {
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const attested = await this.awaitTaskAdmissionBoundary(this.loadAttestedRuntime(), admission);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const attributionExtensionPath = request.provider === 'anthropic' ? resolveAnthropicAttributionExtensionPath() : undefined;
-        const argv = attested.buildAttestedPiArgv(request, attributionExtensionPath);
-        const attestedPiLaunch = resolvePiLaunch({ platform: this.platform });
-        assertWindowsCommandLineWithinLimit(attestedPiLaunch, argv.slice(1), this.platform, 'attested-pi-run');
-        const dir = await this.awaitTaskAdmissionBoundary(this.ensureRuntimeDir(ctx), admission);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const id = attested.makeAttestedTaskId();
-        if (!ATTESTED_TASK_ID_PATTERN.test(id))
-            throw new Error('Generated attested task id is invalid');
-        const paths = attested.makeAttestedTaskPaths(dir.abs, dir.display, id);
-        const promptBytes = Buffer.from(request.prompt, 'utf8');
-        const reportAbsPath = await this.awaitTaskAdmissionBoundary(attested.resolveReportPath(ctx.cwd, request.reportPath), admission);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const auth = attested.observePiOAuth(ctx, request.provider, request.model);
-        const gitOptions = this.attestedGitOptions(admission);
-        const repoRootRealpath = await attested.gitRepoRoot(ctx.cwd, gitOptions);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const cwdRealpath = await this.awaitTaskAdmissionBoundary(realpath(ctx.cwd), admission);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        const startAuthority = await attested.gitAuthoritySnapshot(ctx.cwd, gitOptions);
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        if (!startAuthority.clean)
-            throw new Error('Attested Pi task requires a clean worktree at start');
-        const timeoutSeconds = typeof request.timeoutSeconds === 'number' &&
-            Number.isFinite(request.timeoutSeconds) &&
-            request.timeoutSeconds > 0
-            ? Math.floor(request.timeoutSeconds)
-            : undefined;
-        const task = {
-            id,
-            name: normalizeTaskName(request.name) ?? 'Attested Pi task',
-            command: argv.map(shellQuote).join(' '),
-            status: 'running',
-            outputPath: paths.outputPath,
-            outputAbsPath: paths.outputAbsPath,
-            metadataAbsPath: paths.metadataAbsPath,
-            eventsAbsPath: paths.eventsAbsPath,
-            stderrAbsPath: paths.stderrAbsPath,
-            wrapperAbsPath: paths.wrapperAbsPath,
-            attestationAbsPath: paths.attestationAbsPath,
-            cwd: ctx.cwd,
-            startTime: this.now(),
-            exitCode: undefined,
-            pid: undefined,
-            bytesWritten: 0,
-            isAgent: true,
-            surviveReload: false,
-            notified: false,
-            notifyOnCompletion: false,
-            triggerOnCompletion: false,
-            timeoutSeconds,
-            attestationPath: paths.attestationPath,
-            attestedPi: {
-                eventsPath: paths.eventsPath,
-                stderrPath: paths.stderrPath,
-                wrapperPath: paths.wrapperPath,
-                attestationPath: paths.attestationPath,
-            },
-            terminalPublished: false,
-            terminalPublicationState: 'pending',
-            terminalPublishAttempts: 0,
-            waiters: [],
-        };
-        const admissionArtifacts = [
-            paths.outputAbsPath,
-            paths.eventsAbsPath,
-            paths.stderrAbsPath,
-            paths.wrapperAbsPath,
-            paths.metadataAbsPath,
-            paths.attestationAbsPath,
-        ];
-        const admissionSignal = admission.controller.signal;
-        try {
-            await writeFileFsynced(paths.outputAbsPath, '', admissionSignal);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            await writeFileFsynced(paths.eventsAbsPath, '', admissionSignal);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            await writeFileFsynced(paths.stderrAbsPath, '', admissionSignal);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            await writeFileFsynced(paths.wrapperAbsPath, 'direct-spawn attested Pi task; no shell telemetry wrapper is used\n', admissionSignal);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            await this.writeMetadata(task, admissionSignal);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        }
-        catch (error) {
-            let cleanupError;
-            try {
-                await this.discardUnspawnedTask(task, admissionArtifacts);
-            }
-            catch (cleanupFailure) {
-                cleanupError = cleanupFailure;
-            }
-            if (admissionSignal.aborted) {
-                throw this.surfacedTaskAdmissionError(admission, error, cleanupError);
-            }
-            if (cleanupError !== undefined) {
-                throw new AggregateError([error, cleanupError], `Attested Pi preflight failed and artifact cleanup also failed: ${BackgroundTaskRegistry.errorMessage(cleanupError)}`);
-            }
-            throw error;
-        }
-        this.assertTaskAdmissionOpen('an attested Pi task', admission);
-        this.tasks.set(id, task);
-        let unbindAdmissionCancellation = () => undefined;
-        try {
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            const captured = attested.spawnAndCapturePi(this.spawn, argv, {
-                cwd: ctx.cwd,
-                detached: this.platform !== 'win32',
-                shell: false,
-                stdio: ['ignore', 'pipe', 'pipe'],
-                env: attested.attestedPiChildEnv(this.env),
-                windowsHide: true,
-            }, this.platform, attestedPiLaunch);
-            this.captureSpawnedChild(task, captured.child);
-            captured.child.on('error', (error) => {
-                void this.finalizeAttestedPiTask(task, attested, paths, argv, cwdRealpath, repoRootRealpath, startAuthority, auth, promptBytes, reportAbsPath, captured.stdoutChunks, captured.stderrChunks, 'failed', null, null, error.message);
-            });
-            captured.child.on('close', (code, signalName) => {
-                let status = (code ?? 0) === 0 && signalName === null ? 'completed' : 'failed';
-                let error;
-                if (task.killKind === 'timeout') {
-                    status = 'failed';
-                    error = task.error ?? `Timed out after ${String(timeoutSeconds)}s`;
-                }
-                else if (task.killKind === 'user' || task.killKind === 'shutdown') {
-                    status = 'killed';
-                    error = task.error;
-                }
-                else if (status === 'failed') {
-                    const exitCode = code === null ? 'null' : String(code);
-                    error = `Exited with code ${exitCode}${signalName ? ` (${signalName})` : ''}`;
-                }
-                void this.finalizeAttestedPiTask(task, attested, paths, argv, cwdRealpath, repoRootRealpath, startAuthority, auth, promptBytes, reportAbsPath, captured.stdoutChunks, captured.stderrChunks, status, code, signalName, error);
-            });
-            unbindAdmissionCancellation = this.bindOwnedTaskToAdmission(task, admission);
-            await this.awaitTaskAdmissionBoundary(this.writeMetadata(task, admissionSignal), admission);
-            this.assertTaskAdmissionOpen('an attested Pi task', admission);
-            this.onChange();
-            if (timeoutSeconds !== undefined) {
-                task.timeoutHandle = setTimeout(() => {
-                    if (task.status !== 'running')
-                        return;
-                    task.killKind = 'timeout';
-                    task.error = `Timed out after ${String(timeoutSeconds)}s`;
-                    try {
-                        this.requestKill(task, 'SIGTERM');
-                    }
-                    catch (error) {
-                        void this.finalizeAttestedPiTask(task, attested, paths, argv, cwdRealpath, repoRootRealpath, startAuthority, auth, promptBytes, reportAbsPath, captured.stdoutChunks, captured.stderrChunks, 'failed', null, null, error instanceof Error ? error.message : String(error));
-                    }
-                }, timeoutSeconds * 1000);
-            }
-            return task;
-        }
-        catch (error) {
-            let cleanupError;
-            if (task.child === undefined) {
-                try {
-                    await this.discardUnspawnedTask(task, admissionArtifacts);
-                }
-                catch (cleanupFailure) {
-                    cleanupError = cleanupFailure;
-                }
-            }
-            else {
-                const taskError = admissionSignal.aborted
-                    ? this.taskAdmissionError(admission)
-                    : error instanceof Error
-                        ? error
-                        : new Error(String(error));
-                this.stopOwnedTaskAfterAdmissionCancellation(task, taskError);
-            }
-            if (admissionSignal.aborted) {
-                throw this.surfacedTaskAdmissionError(admission, error, cleanupError);
-            }
-            if (cleanupError !== undefined) {
-                throw new AggregateError([error, cleanupError], `Attested Pi launch failed and artifact cleanup also failed: ${BackgroundTaskRegistry.errorMessage(cleanupError)}`);
-            }
-            throw error;
-        }
-        finally {
-            unbindAdmissionCancellation();
-        }
-    }
-    async finalizeAttestedPiTask(task, attested, paths, argv, cwdRealpath, repoRootRealpath, startAuthority, auth, promptBytes, reportAbsPath, stdoutChunks, stderrChunks, status, exitCode, signal, error) {
-        if (task.finalized)
-            return;
-        task.finalized = true;
-        if (task.timeoutHandle)
-            clearTimeout(task.timeoutHandle);
-        if (this.platform === 'win32')
-            this.clearKillEscalationTimer(task);
-        let finalStatus = status;
-        let finalError = error;
-        const posixForceFailure = await this.awaitPosixProcessGroupBeforeTerminal(task);
-        if (posixForceFailure !== undefined) {
-            finalStatus = 'failed';
-            finalError = BackgroundTaskRegistry.appendTaskError(finalError, posixForceFailure.message);
-        }
-        const windowsForceFailure = await this.awaitWindowsForceBeforeTerminal(task);
-        if (windowsForceFailure !== undefined) {
-            finalStatus = 'failed';
-            finalError = BackgroundTaskRegistry.appendTaskError(finalError, windowsForceFailure.message);
-        }
-        task.exitCode = exitCode;
-        task.signal = signal;
-        task.endTime = this.now();
-        if (finalError)
-            task.error = finalError;
-        const rawEvents = Buffer.concat(stdoutChunks);
-        const rawStderr = Buffer.concat(stderrChunks);
-        await writeFileFsynced(paths.eventsAbsPath, rawEvents);
-        await writeFileFsynced(paths.stderrAbsPath, rawStderr);
-        let parsed;
-        if (finalStatus === 'completed') {
-            try {
-                parsed = attested.parsePiJsonEvents(rawEvents);
-                task.model = parsed.providerScopedModelId;
-                task.tokenUsage = {
-                    input: parsed.tokenUsage.input,
-                    output: parsed.tokenUsage.output,
-                    cacheRead: parsed.tokenUsage.cacheRead,
-                    cacheWrite: parsed.tokenUsage.cacheWrite,
-                    totalTokens: parsed.tokenUsage.totalTokens,
-                };
-                if (parsed.tokenUsage.costTotal !== undefined)
-                    task.tokenUsage.costTotal = parsed.tokenUsage.costTotal;
-                task.toolUsage = parsed.toolUsage;
-                const outputBytes = Buffer.from(parsed.humanTranscript, 'utf8');
-                task.bytesWritten = outputBytes.length;
-                await writeFileFsynced(paths.outputAbsPath, outputBytes);
-            }
-            catch (parseError) {
-                finalStatus = 'failed';
-                task.error = parseError instanceof Error ? parseError.message : String(parseError);
-                const outputBytes = Buffer.from(`[attested Pi task error: ${task.error}]\n`, 'utf8');
-                task.bytesWritten = outputBytes.length;
-                await writeFileFsynced(paths.outputAbsPath, outputBytes);
-            }
-        }
-        else {
-            const outputBytes = Buffer.from(rawStderr.toString('utf8'), 'utf8');
-            task.bytesWritten = outputBytes.length;
-            await writeFileFsynced(paths.outputAbsPath, outputBytes);
-        }
-        try {
-            if (finalStatus === 'completed' && parsed) {
-                const finishAuthority = await attested.gitAuthoritySnapshot(task.cwd, this.attestedGitOptions());
-                const completedSnapshot = { ...snapshot(task), status: 'completed' };
-                await this.writeMetadataSnapshot(task, completedSnapshot);
-                const attestation = await attested.buildPiTaskAttestation({
-                    task: completedSnapshot,
-                    paths,
-                    sessionDir: dirNameFromDisplay(paths.outputPath),
-                    argv,
-                    cwdRealpath,
-                    repoRootRealpath,
-                    startAuthority,
-                    finishAuthority,
-                    parsedEvents: parsed,
-                    auth,
-                    prompt: promptBytes,
-                    reportAbsPath,
-                });
-                await writeJsonAtomic(paths.attestationAbsPath, attestation);
-            }
-            else {
-                await this.writeMetadataSnapshot(task, { ...snapshot(task), status: finalStatus });
-            }
-        }
-        catch (attestationError) {
-            finalStatus = 'failed';
-            task.error =
-                attestationError instanceof Error ? attestationError.message : String(attestationError);
-            await this.writeMetadataSnapshot(task, { ...snapshot(task), status: 'failed' }).catch((metadataError) => {
-                this.logger.error(`[background-tasks] failed to write failed attested metadata for ${task.id}:`, metadataError);
-            });
-        }
-        task.status = finalStatus;
-        for (const waiter of task.waiters.splice(0))
-            waiter();
-        this.onChange();
-        this.publishTerminal(task);
-        this.pruneOldTasks();
-    }
     resolveTask(idOrPrefix) {
         const id = idOrPrefix.trim();
         if (!id)
@@ -2062,9 +1365,8 @@ export class BackgroundTaskRegistry {
         if (task.reloadExecution !== undefined) {
             return task.reloadExecution.requestStop(kind, reason);
         }
-        const stopWaitMs = task.managedStopWaitMs ?? this.stopWaitMs;
+        const stopWaitMs = this.stopWaitMs;
         if (this.platform !== 'win32' &&
-            task.managedCancel === undefined &&
             task.posixProcessGroupSignalAuthorityReleased === true &&
             this.posixProcessGroupKillStates.get(task) === undefined) {
             const finalized = await this.waitForEnd(task, stopWaitMs);
@@ -2077,11 +1379,9 @@ export class BackgroundTaskRegistry {
         if (reason)
             task.error = reason;
         this.requestKill(task, 'SIGTERM');
-        const stopped = task.managedCancel === undefined && this.platform === 'win32'
+        const stopped = this.platform === 'win32'
             ? await this.waitForEndOrWindowsForceFailure(task, stopWaitMs)
-            : task.managedCancel === undefined
-                ? await this.waitForEndOrPosixForceFailure(task, stopWaitMs)
-                : await this.waitForEnd(task, stopWaitMs);
+            : await this.waitForEndOrPosixForceFailure(task, stopWaitMs);
         const posixForceFailure = this.posixProcessGroupKillStates.get(task)?.failure;
         if (posixForceFailure !== undefined)
             throw posixForceFailure;
@@ -2812,19 +2112,6 @@ export class BackgroundTaskRegistry {
         if (task.status !== 'running') {
             throw new Error(`Task ${task.id} is ${task.status}, not running`);
         }
-        if (task.managedCancel !== undefined) {
-            if (task.managedCancelRequested)
-                return;
-            task.managedCancelRequested = true;
-            try {
-                task.managedCancel();
-            }
-            catch (error) {
-                throw new Error(`Could not cancel managed task ${task.id}: ${BackgroundTaskRegistry.errorMessage(error)}`);
-            }
-            task.killSignalSent = true;
-            return;
-        }
         if (!task.child) {
             throw new Error(`Task ${task.id} has no child process handle`);
         }
@@ -3191,11 +2478,7 @@ export class BackgroundTaskRegistry {
         const exit = task.exitCode === undefined ? '' : `\n  <exit-code>${String(task.exitCode)}</exit-code>`;
         const error = task.error ? `\n  <error>${escapeXml(task.error)}</error>` : '';
         const taskName = taskDisplayName(task);
-        const guidance = task.fusion === undefined
-            ? 'Terminal state and output metadata are durable. Do not call bg_status to reconfirm; use bg_logs only if output is needed.'
-            : task.status === 'completed'
-                ? `Fusion result is durably committed at ${task.fusion.artifactDir}. Call bg_result({taskId:${JSON.stringify(task.id)}}) once to retrieve it; do not poll.`
-                : `Fusion ended ${task.status}. Inspect the preserved artifacts at ${task.fusion.artifactDir}; do not poll.`;
+        const guidance = 'Terminal state and output metadata are durable. Do not call bg_status to reconfirm; use bg_logs only if output is needed.';
         const content = [
             '<background-task-notification>',
             `  <task-id>${task.id}</task-id>`,
@@ -3246,10 +2529,7 @@ export class BackgroundTaskRegistry {
         task.exitCode = exitCode;
         task.signal = signal ?? null;
         // Keep status="running" until the final wrapped-agent fragment has been
-        // consumed and the output plus terminal metadata are durable. Publishing a
-        // terminal state earlier lets bg_status observe the previous assistant
-        // turn's context snapshot and recreates the same false-completion race the
-        // attested producer is required to prevent.
+        // consumed and the output plus terminal metadata are durable.
         try {
             if (task.telemetryWrapped) {
                 // Child-process close can be observed before the wrapper stdout listener has

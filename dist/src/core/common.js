@@ -12,11 +12,6 @@ export class ReloadSurvivalError extends Error {
         this.name = 'ReloadSurvivalError';
     }
 }
-export function rejectSurvivalForTaskKind(value, kind) {
-    if (!Object.prototype.hasOwnProperty.call(value, 'surviveReload'))
-        return;
-    throw new ReloadSurvivalError('pi_bg_survive_reload_unsupported_task_kind', `${kind} does not support surviveReload; only ordinary isAgent:false shell tasks may survive reload`);
-}
 /**
  * Describe the actual parent-agent completion path for one bg_run launch.
  * A wake request cannot take effect without the notification that carries it.
@@ -644,9 +639,6 @@ export function snapshot(task) {
         model: task.model,
         telemetryUnavailableReason: task.telemetryUnavailableReason,
         shellPolicy: task.shellPolicy,
-        attestationPath: task.attestationPath,
-        delegate: task.delegate,
-        fusion: task.fusion,
     };
 }
 export function formatSnapshotList(tasks, now = Date.now()) {
@@ -702,86 +694,5 @@ export async function boundedRead(filePath, maxBytes, tail) {
 }
 export function escapeXml(value) {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-export const UPDATE_COMMAND = '/bg-update';
-const SEMVER_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
-export function parseSemver(value) {
-    if (typeof value !== 'string')
-        return undefined;
-    const match = SEMVER_PATTERN.exec(value.trim());
-    if (!match)
-        return undefined;
-    const majorRaw = match[1];
-    const minorRaw = match[2];
-    const patchRaw = match[3];
-    if (majorRaw === undefined || minorRaw === undefined || patchRaw === undefined)
-        return undefined;
-    const major = Number(majorRaw);
-    const minor = Number(minorRaw);
-    const patch = Number(patchRaw);
-    if (!Number.isInteger(major) || !Number.isInteger(minor) || !Number.isInteger(patch))
-        return undefined;
-    const prerelease = match[4] !== undefined ? match[4].split('.') : [];
-    return { major, minor, patch, prerelease };
-}
-function comparePrerelease(a, b) {
-    if (a.length === 0 && b.length === 0)
-        return 0;
-    // A version without prerelease identifiers outranks the same core with prerelease identifiers.
-    if (a.length === 0)
-        return 1;
-    if (b.length === 0)
-        return -1;
-    const shared = Math.min(a.length, b.length);
-    for (let i = 0; i < shared; i++) {
-        const idA = a[i];
-        const idB = b[i];
-        if (idA === undefined || idB === undefined)
-            break;
-        if (idA === idB)
-            continue;
-        const numericA = /^\d+$/.test(idA);
-        const numericB = /^\d+$/.test(idB);
-        if (numericA && numericB) {
-            const diff = Number(idA) - Number(idB);
-            if (diff !== 0)
-                return diff < 0 ? -1 : 1;
-            continue;
-        }
-        // Numeric identifiers always have lower precedence than non-numeric identifiers.
-        if (numericA)
-            return -1;
-        if (numericB)
-            return 1;
-        return idA < idB ? -1 : 1;
-    }
-    if (a.length === b.length)
-        return 0;
-    return a.length < b.length ? -1 : 1;
-}
-/** Compare two semver strings. Returns -1/0/1, or undefined when either side is not valid semver. */
-export function compareSemver(a, b) {
-    const left = parseSemver(a);
-    const right = parseSemver(b);
-    if (!left || !right)
-        return undefined;
-    if (left.major !== right.major)
-        return left.major < right.major ? -1 : 1;
-    if (left.minor !== right.minor)
-        return left.minor < right.minor ? -1 : 1;
-    if (left.patch !== right.patch)
-        return left.patch < right.patch ? -1 : 1;
-    return comparePrerelease(left.prerelease, right.prerelease);
-}
-export function isNewerVersion(latest, current) {
-    return compareSemver(latest, current) === 1;
-}
-/** Footer segment shown only when a newer published version exists; undefined otherwise. */
-export function formatUpdateSegment(latest, current) {
-    if (!latest)
-        return undefined;
-    if (!isNewerVersion(latest, current))
-        return undefined;
-    return `\u2b06 v${latest} ${UPDATE_COMMAND}`;
 }
 //# sourceMappingURL=common.js.map

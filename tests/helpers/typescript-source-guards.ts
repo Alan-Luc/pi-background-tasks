@@ -39,7 +39,9 @@ interface SourceFileCompilerMetadata extends ts.SourceFile {
 }
 
 function scriptKind(fileName: string): ts.ScriptKind {
-  return fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  if (fileName.endsWith('.tsx')) return ts.ScriptKind.TSX;
+  if (fileName.endsWith('.mjs') || fileName.endsWith('.js')) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
 }
 
 function parseSource(fileName: string, source: string): ts.SourceFile {
@@ -172,6 +174,7 @@ function bindSource(fileName: string, source: string): BoundSource {
     noLib: true,
     noResolve: true,
     target: ts.ScriptTarget.Latest,
+    allowJs: true,
   };
   const host: ts.CompilerHost = {
     fileExists: (candidate) => candidate === fileName,

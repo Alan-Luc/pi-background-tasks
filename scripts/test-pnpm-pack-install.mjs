@@ -55,7 +55,7 @@ try {
   );
   writeFileSync(
     join(temp, 'pnpm-workspace.yaml'),
-    'blockExoticSubdeps: true\nautoInstallPeers: false\n',
+    'packages: []\nblockExoticSubdeps: true\nautoInstallPeers: false\n',
   );
 
   run(pnpm, ['install', '--ignore-scripts'], temp);

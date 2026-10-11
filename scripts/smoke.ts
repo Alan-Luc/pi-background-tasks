@@ -14,9 +14,7 @@ try {
     [
       '--no-extensions',
       '-e',
-      './dist/extensions/anthropic-attribution.js',
-      '-e',
-      './dist/extensions/background-tasks.js',
+      join(root, 'dist/extensions/background-tasks.js'),
       '--offline',
       '--no-tools',
       '--no-session',
@@ -24,7 +22,7 @@ try {
       '/jobs',
     ],
     {
-      cwd: root,
+      cwd: agentDir,
       encoding: 'utf8',
       env: {
         ...process.env,

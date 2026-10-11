@@ -3,9 +3,6 @@ import { open } from 'node:fs/promises';
 import { basename, delimiter, extname, isAbsolute, join, resolve, win32 } from 'node:path';
 import { DEFAULT_MAX_BYTES } from '@earendil-works/pi-coding-agent';
 import type { BackgroundTaskChildProcess } from './registry.js';
-import type { DelegateBudgetRouteSource, DelegateExtensionMode } from './delegate/types.js';
-import type { FusionResultDetails, FusionUsage, FusionWorkflowId } from './fusion/types.js';
-
 export const TASK_STATUS_VALUES = ['running', 'completed', 'failed', 'killed'] as const;
 export const TERMINAL_TASK_STATUS_VALUES = ['completed', 'failed', 'killed'] as const;
 
@@ -26,7 +23,6 @@ export type TerminalPublicationAbandonReason =
 export type ReloadSurvivalErrorCode =
   | 'pi_bg_survive_reload_invalid'
   | 'pi_bg_survive_reload_requires_non_agent'
-  | 'pi_bg_survive_reload_unsupported_task_kind'
   | 'pi_bg_reload_owner_unavailable'
   | 'pi_bg_reload_owner_protocol_incompatible'
   | 'pi_bg_reload_owner_activation_conflict'
@@ -41,14 +37,6 @@ export class ReloadSurvivalError extends Error {
     super(`${code}: ${message}`);
     this.name = 'ReloadSurvivalError';
   }
-}
-
-export function rejectSurvivalForTaskKind(value: object, kind: string): void {
-  if (!Object.prototype.hasOwnProperty.call(value, 'surviveReload')) return;
-  throw new ReloadSurvivalError(
-    'pi_bg_survive_reload_unsupported_task_kind',
-    `${kind} does not support surviveReload; only ordinary isAgent:false shell tasks may survive reload`,
-  );
 }
 
 export type JsonObject = Readonly<Record<PropertyKey, unknown>>;
@@ -247,74 +235,13 @@ export interface BgTaskSnapshot {
   telemetryUnavailableReason?: string | undefined;
   /** Immutable non-secret shell selection for ordinary shell tasks. */
   shellPolicy?: ShellPolicySnapshot | undefined;
-  attestationPath?: string | undefined;
-  delegate?: DelegateTaskFacts | undefined;
-  fusion?: FusionTaskFacts | undefined;
-}
-
-export interface AttestedPiTaskFiles {
-  eventsPath: string;
-  stderrPath: string;
-  wrapperPath: string;
-  attestationPath: string;
-}
-
-export interface AttestedPiTaskSnapshot extends BgTaskSnapshot {
-  attestedPi?: AttestedPiTaskFiles | undefined;
-}
-
-/** Delegate-specific task facts surfaced through snapshots and `bg_result`. */
-export interface DelegateTaskFacts {
-  taskId: string;
-  launchNonce: string;
-  artifactDir: string;
-  artifactDirAbs: string;
-  seedSha256: string;
-  childSessionId: string;
-  route: { provider: string; model: string; qualifiedId: string };
-  budget: DelegateBudgetRouteSource;
-  extensionMode: DelegateExtensionMode;
-  autoDeliver: 'never' | 'when_small' | 'always';
-  /** Set once the run reaches a terminal state and its result has been evaluated. */
-  outcome?: DelegateTaskOutcome | undefined;
-}
-
-export interface DelegateTaskOutcome {
-  status: 'committed' | 'failed' | 'cancelled';
-  errorCode?: string | undefined;
-  answerBytes?: number | undefined;
-  answerSha256?: string | undefined;
-  turns?: number | undefined;
-  toolCalls?: number | undefined;
-}
-
-/** Fusion-specific task facts surfaced through snapshots and `bg_result`. */
-export interface FusionTaskFacts {
-  runId: string;
-  workflow: FusionWorkflowId;
-  artifactDir: string;
-  artifactDirAbs: string;
-  state: string;
-  outcome?: FusionTaskOutcome | undefined;
-  /** Durable once-only accounting claim made by the first successful bg_result retrieval. */
-  usageDelivered: boolean;
-}
-
-export interface FusionTaskOutcome {
-  status: 'committed' | 'failed' | 'cancelled';
-  resultDetails?: FusionResultDetails | undefined;
-  usage?: FusionUsage | undefined;
-  error?: string | undefined;
 }
 
 export interface BgTask extends Omit<BgTaskSnapshot, 'name'> {
   name: string;
   outputAbsPath: string;
   metadataAbsPath: string;
-  eventsAbsPath?: string | undefined;
-  stderrAbsPath?: string | undefined;
   wrapperAbsPath?: string | undefined;
-  attestationAbsPath?: string | undefined;
   child?: BackgroundTaskChildProcess | undefined;
   /** Immutable in-memory ownership captured from a detached POSIX spawn; never restored from metadata. */
   ownedPosixProcessGroupId?: number | undefined;
@@ -344,20 +271,12 @@ export interface BgTask extends Omit<BgTaskSnapshot, 'name'> {
   /** Partial trailing stdout line held between chunks while reconstructing wrapped-agent control lines. */
   agentStdoutBuffer?: string | undefined;
   telemetryUnavailableReason?: string | undefined;
-  attestationPath?: string | undefined;
-  attestedPi?: AttestedPiTaskFiles | undefined;
-  delegate?: DelegateTaskFacts | undefined;
-  fusion?: FusionTaskFacts | undefined;
   /** In-memory same-process authority for an opted ordinary shell task; never serialized. */
   reloadExecution?: ReloadableShellExecutionV1 | undefined;
   /** Fresh-registry terminal host delivery state for an imported owner execution. */
   reloadHostDeliveryInFlight?: boolean | undefined;
   reloadHostDeliverySettled?: boolean | undefined;
   reloadHostNotificationSettled?: boolean | undefined;
-  /** Cancellation hook for an in-process managed task such as Fusion. */
-  managedCancel?: (() => void) | undefined;
-  managedCancelRequested?: boolean | undefined;
-  managedStopWaitMs?: number | undefined;
   metadataWriteChain?: Promise<void> | undefined;
   waiters: Array<() => void>;
 }
@@ -453,46 +372,6 @@ export interface StartTaskOptions {
   surviveReload?: boolean | undefined;
   /** @internal EventBus protocol barrier; callers should not set this outside the extension service. */
   terminalPublicationGate?: Promise<void> | undefined;
-}
-
-/** Prepared delegate launch handed to the registry after preflight has succeeded. */
-export interface StartManagedTaskOptions {
-  id: string;
-  name: string;
-  command: string;
-  description?: string | undefined;
-  isAgent: boolean;
-  completion: Promise<void>;
-  cancel: () => void;
-  notifyOnCompletion: boolean;
-  triggerOnCompletion: boolean;
-  fusion: FusionTaskFacts;
-  stopWaitMs?: number | undefined;
-  /** Prevent terminal publication until the launch receipt handoff is observable. */
-  terminalPublicationGate?: Promise<void> | undefined;
-}
-
-export interface StartDelegateTaskOptions {
-  name: string;
-  argv: readonly string[];
-  /** Prompt bytes delivered over stdin, never as a shell or positional argument. */
-  stdinBytes: Buffer;
-  env: NodeJS.ProcessEnv;
-  facts: DelegateTaskFacts;
-  notifyOnCompletion: boolean;
-  triggerOnCompletion: boolean;
-  timeoutSeconds?: number | undefined;
-}
-
-export interface StartAttestedPiTaskOptions {
-  name: string;
-  provider: string;
-  model: string;
-  prompt: string;
-  reportPath: string;
-  extraPiArgs?: string[] | undefined;
-  thinking?: string | undefined;
-  timeoutSeconds?: number | undefined;
 }
 
 export const DEFAULT_LOG_BYTES = Math.min(DEFAULT_MAX_BYTES, 50 * 1024);
@@ -1184,9 +1063,6 @@ export function snapshot(task: BgTask): BgTaskSnapshot {
     model: task.model,
     telemetryUnavailableReason: task.telemetryUnavailableReason,
     shellPolicy: task.shellPolicy,
-    attestationPath: task.attestationPath,
-    delegate: task.delegate,
-    fusion: task.fusion,
   };
 }
 
@@ -1248,84 +1124,4 @@ export async function boundedRead(
 
 export function escapeXml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-export const UPDATE_COMMAND = '/bg-update';
-
-interface ParsedSemver {
-  major: number;
-  minor: number;
-  patch: number;
-  prerelease: string[];
-}
-
-const SEMVER_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
-
-export function parseSemver(value: string): ParsedSemver | undefined {
-  if (typeof value !== 'string') return undefined;
-  const match = SEMVER_PATTERN.exec(value.trim());
-  if (!match) return undefined;
-  const majorRaw = match[1];
-  const minorRaw = match[2];
-  const patchRaw = match[3];
-  if (majorRaw === undefined || minorRaw === undefined || patchRaw === undefined) return undefined;
-  const major = Number(majorRaw);
-  const minor = Number(minorRaw);
-  const patch = Number(patchRaw);
-  if (!Number.isInteger(major) || !Number.isInteger(minor) || !Number.isInteger(patch))
-    return undefined;
-  const prerelease = match[4] !== undefined ? match[4].split('.') : [];
-  return { major, minor, patch, prerelease };
-}
-
-function comparePrerelease(a: string[], b: string[]): number {
-  if (a.length === 0 && b.length === 0) return 0;
-  // A version without prerelease identifiers outranks the same core with prerelease identifiers.
-  if (a.length === 0) return 1;
-  if (b.length === 0) return -1;
-  const shared = Math.min(a.length, b.length);
-  for (let i = 0; i < shared; i++) {
-    const idA = a[i];
-    const idB = b[i];
-    if (idA === undefined || idB === undefined) break;
-    if (idA === idB) continue;
-    const numericA = /^\d+$/.test(idA);
-    const numericB = /^\d+$/.test(idB);
-    if (numericA && numericB) {
-      const diff = Number(idA) - Number(idB);
-      if (diff !== 0) return diff < 0 ? -1 : 1;
-      continue;
-    }
-    // Numeric identifiers always have lower precedence than non-numeric identifiers.
-    if (numericA) return -1;
-    if (numericB) return 1;
-    return idA < idB ? -1 : 1;
-  }
-  if (a.length === b.length) return 0;
-  return a.length < b.length ? -1 : 1;
-}
-
-/** Compare two semver strings. Returns -1/0/1, or undefined when either side is not valid semver. */
-export function compareSemver(a: string, b: string): number | undefined {
-  const left = parseSemver(a);
-  const right = parseSemver(b);
-  if (!left || !right) return undefined;
-  if (left.major !== right.major) return left.major < right.major ? -1 : 1;
-  if (left.minor !== right.minor) return left.minor < right.minor ? -1 : 1;
-  if (left.patch !== right.patch) return left.patch < right.patch ? -1 : 1;
-  return comparePrerelease(left.prerelease, right.prerelease);
-}
-
-export function isNewerVersion(latest: string, current: string): boolean {
-  return compareSemver(latest, current) === 1;
-}
-
-/** Footer segment shown only when a newer published version exists; undefined otherwise. */
-export function formatUpdateSegment(
-  latest: string | undefined,
-  current: string,
-): string | undefined {
-  if (!latest) return undefined;
-  if (!isNewerVersion(latest, current)) return undefined;
-  return `\u2b06 v${latest} ${UPDATE_COMMAND}`;
 }

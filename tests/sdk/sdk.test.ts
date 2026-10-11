@@ -5,13 +5,11 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer } from 'node:http';
 import {
   ModelRuntime,
   createAgentSession,
   createEventBus,
   DefaultResourceLoader,
-  ModelRegistry,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -32,20 +30,11 @@ import {
   type BackgroundTaskExtensionResponse,
   type BackgroundTaskExtensionTerminal,
 } from '../../src/core/extension-api.js';
-import { parsePackageInfo } from '../../src/core/update-check.js';
 import backgroundTasksExtension from '../../src/extension.js';
 
 const extensionPath = resolve('extensions/background-tasks.ts');
 const scriptedProviderPath = resolve('tests/scripted-provider/scripted-provider-extension.ts');
 const roots: string[] = [];
-
-function skipWin32PiPathFixture(t: TestContext, target: string): boolean {
-  if (process.platform !== 'win32') return false;
-  t.skip(
-    `${target} fake Pi PATH interception is not applicable on win32 because production resolves the Pi package instead of PATH by design`,
-  );
-  return true;
-}
 
 function skipWin32PosixPiTelemetry(t: TestContext): boolean {
   if (process.platform !== 'win32') return false;
@@ -91,7 +80,6 @@ async function harness(options: SdkHarnessOptions = {}) {
     authPath: join(agentDir, 'auth.json'),
     modelsPath: null,
   });
-  const modelRegistry = new ModelRegistry(modelRuntime);
   const { session } = await createAgentSession({
     cwd,
     agentDir,
@@ -101,7 +89,7 @@ async function harness(options: SdkHarnessOptions = {}) {
     modelRuntime,
     noTools: 'builtin',
   });
-  return { session, cwd, modelRegistry, modelRuntime };
+  return { session, cwd };
 }
 
 type JsonObject = Record<PropertyKey, unknown>;
@@ -430,68 +418,6 @@ function makeStatusUi(
   };
 }
 
-async function startRegistry(
-  payload: string,
-  status = 200,
-): Promise<{ url: string; close: () => Promise<void> }> {
-  const server = createServer((_req, res) => {
-    res.writeHead(status, { 'content-type': 'application/json' });
-    res.end(payload);
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      resolve();
-    });
-  });
-  const address = server.address();
-  assert.ok(
-    address !== null && typeof address === 'object',
-    'registry server must report an address',
-  );
-  return {
-    url: `http://127.0.0.1:${String(address.port)}`,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      }),
-  };
-}
-
-async function renderFooterViaJobs(session: AgentSession): Promise<void> {
-  const jobs = session.extensionRunner
-    .getRegisteredCommands()
-    .find((cmd) => cmd.invocationName === 'jobs');
-  assert.ok(jobs);
-  await jobs.handler('', session.extensionRunner.createCommandContext());
-}
-
-const UPDATE_ENV_KEYS = ['PI_OFFLINE', 'PI_BG_DISABLE_UPDATE_CHECK', 'PI_BG_REGISTRY_URL'] as const;
-
-type EnvOverrides = Record<string, string>;
-
-interface SettledFooterOptions {
-  env: EnvOverrides;
-  registryPayload: string;
-  registryStatus?: number;
-}
-
-function git(cwd: string, args: string[]): void {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-}
-
-async function initCleanGit(cwd: string): Promise<void> {
-  git(cwd, ['init']);
-  git(cwd, ['config', 'user.email', 'pi-bg@example.invalid']);
-  git(cwd, ['config', 'user.name', 'Pi BG Tests']);
-  await writeFile(join(cwd, 'README.md'), 'clean\n', 'utf8');
-  await writeFile(join(cwd, '.gitignore'), '.pi/\nbin/\nreport.md\n', 'utf8');
-  git(cwd, ['add', 'README.md', '.gitignore']);
-  git(cwd, ['commit', '-m', 'init']);
-}
-
 function restoreEnvValue(key: string, value: string | undefined): void {
   if (value === undefined) {
     Reflect.deleteProperty(process.env, key);
@@ -500,47 +426,13 @@ function restoreEnvValue(key: string, value: string | undefined): void {
   process.env[key] = value;
 }
 
-async function settledFooter(
-  options: SettledFooterOptions,
-): Promise<{ status: string | undefined; threw: boolean }> {
-  const saved = new Map<string, string | undefined>();
-  for (const key of UPDATE_ENV_KEYS) {
-    saved.set(key, process.env[key]);
-    restoreEnvValue(key, undefined);
-  }
-  for (const [key, value] of Object.entries(options.env)) process.env[key] = value;
-  const registry = await startRegistry(options.registryPayload, options.registryStatus);
-  process.env['PI_BG_REGISTRY_URL'] = registry.url;
-  const { session } = await harness();
-  const statuses: Array<string | undefined> = [];
-  const notifications: UiNotification[] = [];
-  session.extensionRunner.setUIContext(
-    makeStatusUi(session.extensionRunner.getUIContext(), statuses, notifications),
-  );
-  let threw = false;
-  try {
-    await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await renderFooterViaJobs(session);
-  } catch {
-    threw = true;
-  } finally {
-    await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
-    session.dispose();
-    await registry.close();
-    for (const key of UPDATE_ENV_KEYS) {
-      restoreEnvValue(key, saved.get(key));
-    }
-  }
-  return { status: statuses.at(-1), threw };
-}
-
 void describe('sdk', () => {
-  void it('registers commands, tools, shortcuts, renderers, and runs with output and metadata files', async () => {
+  void it('registers only process commands, tools, shortcuts, and renderer and persists task output', async () => {
     const { session, cwd } = await harness();
     try {
-      for (const tool of ['bg_run', 'bg_status', 'bg_logs', 'bg_kill'])
-        assert.ok(session.getActiveToolNames().includes(tool), tool);
+      assert.deepEqual(session.getActiveToolNames().sort(), [
+        'bg_kill', 'bg_logs', 'bg_run', 'bg_status',
+      ]);
       const bgRunTool = session.getToolDefinition('bg_run');
       assert.ok(bgRunTool, 'bg_run tool should be registered');
       const bgRunParams: unknown = bgRunTool.parameters;
@@ -554,21 +446,12 @@ void describe('sdk', () => {
       const isAgentSchema = isJsonObject(properties) ? properties['isAgent'] : bgRunParams;
       assert.match(JSON.stringify(isAgentSchema), /LLM\/agent/);
       const cmds = session.extensionRunner.getRegisteredCommands().map((c) => c.invocationName);
-      for (const cmd of [
-        'bg',
-        'jobs',
-        'logs',
-        'kill',
-        'tasks',
-        'bg-tasks',
-        'bg-clear',
-        'bg-update',
-      ])
-        assert.ok(cmds.includes(cmd), cmd);
+      assert.deepEqual(cmds.sort(), [
+        'bg', 'bg-clear', 'bg-tasks', 'jobs', 'kill', 'logs', 'tasks',
+      ]);
       assert.ok(session.extensionRunner.getMessageRenderer('background-task-notification'));
       const shortcuts = session.extensionRunner.getShortcuts({});
-      assert.ok(shortcuts.has('shift+down'));
-      assert.ok(shortcuts.has('ctrl+alt+c'));
+      assert.deepEqual([...shortcuts.keys()].sort(), ['ctrl+alt+c', 'shift+down']);
 
       const r = await exec(session, 'bg_run', {
         isAgent: false,
@@ -577,20 +460,20 @@ void describe('sdk', () => {
         notifyOnCompletion: false,
         triggerOnCompletion: false,
       });
-      const t = await wait(session, taskFromResult(r).id);
-      assert.equal(t.status, 'completed');
-      assert.equal(t.name, 'SDK Echo');
-      assert.equal(t.isAgent, false);
-      assert.ok(existsSync(join(cwd, t.outputPath)));
-      const metadataPath = join(cwd, t.outputPath.replace(/\.output$/, '.json'));
+      const task = await wait(session, taskFromResult(r).id);
+      assert.equal(task.status, 'completed');
+      assert.equal(task.name, 'SDK Echo');
+      assert.equal(task.isAgent, false);
+      assert.ok(existsSync(join(cwd, task.outputPath)));
+      const metadataPath = join(cwd, task.outputPath.replace(/\.output$/, '.json'));
       assert.ok(existsSync(metadataPath));
       const metadata = await readJsonWithStatus(metadataPath, 'completed');
       assert.equal(metadata['status'], 'completed');
       assert.equal(metadata['name'], 'SDK Echo');
       assert.equal(metadata['isAgent'], false);
-      const logs = await exec(session, 'bg_logs', { taskId: t.id, maxBytes: 100 });
+      const logs = await exec(session, 'bg_logs', { taskId: task.id, maxBytes: 100 });
       assert.match(resultText(logs), /sdk-ok/);
-      await assert.rejects(() => exec(session, 'bg_kill', { taskId: t.id }), /not running/);
+      await assert.rejects(() => exec(session, 'bg_kill', { taskId: task.id }), /not running/);
     } finally {
       await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
       session.dispose();
@@ -973,121 +856,6 @@ void describe('sdk', () => {
       BackgroundTaskRegistry.prototype.ensureRuntimeDir = originalEnsureRuntimeDir;
       globalThis.setInterval = realSetInterval;
       globalThis.clearInterval = realClearInterval;
-    }
-  });
-
-  void it('runs the structured bg_run_pi_attested tool and writes a complete flat attestation', async (t) => {
-    if (skipWin32PiPathFixture(t, 'attested')) return;
-    const { session, cwd, modelRegistry, modelRuntime } = await harness();
-    const oldPath = process.env['PATH'];
-    try {
-      await initCleanGit(cwd);
-      modelRegistry.registerProvider('openai-codex', {
-        name: 'OpenAI Codex Test OAuth',
-        baseUrl: 'https://example.invalid',
-        apiKey: 'PI_BG_TEST_KEY',
-        api: 'openai-codex-responses',
-        models: [
-          {
-            id: 'gpt-5.5',
-            name: 'GPT 5.5',
-            reasoning: false,
-            input: ['text'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 100000,
-            maxTokens: 4096,
-          },
-        ],
-      });
-      // Pi 0.83 builds its own ModelRegistry facade per session, so the OAuth
-      // observation must be stubbed on the shared ModelRuntime it delegates to.
-      const originalOAuth = modelRuntime.isUsingOAuth.bind(modelRuntime);
-      modelRuntime.isUsingOAuth = (providerId: string) =>
-        providerId === 'openai-codex' ? true : originalOAuth(providerId);
-      const bin = join(cwd, 'bin');
-      await mkdir(bin, { recursive: true });
-      const fakePi = join(bin, 'pi');
-      await writeFile(
-        fakePi,
-        `#!/usr/bin/env node
-const { writeFileSync } = require('node:fs');
-const args = process.argv.slice(2);
-if (args[0] !== '--mode' || args[1] !== 'json') process.exit(10);
-writeFileSync('report.md', 'sdk report\\n');
-const provider = args[args.indexOf('--provider') + 1];
-const model = args[args.indexOf('--model') + 1];
-const events = [
-  { type: 'session', version: 3, id: 'pi-session-sdk', timestamp: '2026-01-01T00:00:00.000Z', cwd: process.cwd() },
-  { type: 'agent_start' },
-  { type: 'message_end', message: { role: 'assistant', provider, model, usage: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 30, cost: { total: 0.44 } }, content: [{ type: 'text', text: 'sdk attested done' }], stopReason: 'stop' } },
-  { type: 'agent_end', messages: [] },
-];
-for (const event of events) console.log(JSON.stringify(event));
-console.error('sdk stderr');
-`,
-        'utf8',
-      );
-      await chmod(fakePi, 0o755);
-      process.env['PATH'] = `${bin}${delimiter}${oldPath ?? ''}`;
-
-      const result = await exec(session, 'bg_run_pi_attested', {
-        name: 'SDK Attested',
-        provider: 'openai-codex',
-        model: 'gpt-5.5',
-        prompt: 'produce sdk attestation',
-        reportPath: 'report.md',
-        extraPiArgs: ['--no-extensions'],
-      });
-      const task = await wait(session, taskFromResult(result).id, 100);
-      assert.equal(task.status, 'completed');
-      assert.match(task.id, /^b[0-9a-f]{32}$/);
-      assert.equal(task.model, 'openai-codex/gpt-5.5');
-      assert.deepEqual(task.tokenUsage, {
-        input: 20,
-        output: 10,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 30,
-        costTotal: 0.44,
-      });
-      const attestationPath = join(cwd, task.outputPath.replace(/\.output$/, '.attestation.json'));
-      for (let attempt = 0; attempt < 100 && !existsSync(attestationPath); attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      assert.ok(existsSync(attestationPath));
-      const attestation = parseJsonObject(
-        await readFile(attestationPath, 'utf8'),
-        'SDK attestation should be JSON',
-      );
-      const invocation = requiredJsonObject(attestation['invocation'], 'invocation');
-      assert.equal(invocation['pi_session_id'], 'pi-session-sdk');
-      assert.deepEqual(invocation['argv'], [
-        'pi',
-        '--mode',
-        'json',
-        '--provider',
-        'openai-codex',
-        '--model',
-        'gpt-5.5',
-        '--no-extensions',
-        'produce sdk attestation',
-      ]);
-      assert.equal(invocation['credential_kind'], 'oauth');
-      const artifacts = requiredJsonObject(attestation['artifacts'], 'artifacts');
-      const sourceHashes = requiredJsonObject(attestation['source_hashes'], 'source hashes');
-      assert.equal(
-        requiredJsonObject(artifacts['task_output'], 'task output')['sha256'],
-        sourceHashes['output_sha256'],
-      );
-      assert.match(await readFile(join(cwd, task.outputPath), 'utf8'), /sdk attested done/);
-      assert.match(
-        await readFile(join(cwd, task.outputPath.replace(/\.output$/, '.stderr')), 'utf8'),
-        /sdk stderr/,
-      );
-    } finally {
-      restoreEnvValue('PATH', oldPath);
-      await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
-      session.dispose();
     }
   });
 
@@ -1705,101 +1473,5 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
     assert.equal(firstTask(s2).status, 'killed');
     assert.match(firstTask(s1).error ?? '', /shutdown/);
     session.dispose();
-  });
-
-  void it('surfaces an update-available footer segment and registers a non-installing /bg-update command', async () => {
-    const saved = new Map<string, string | undefined>();
-    for (const key of UPDATE_ENV_KEYS) {
-      saved.set(key, process.env[key]);
-      restoreEnvValue(key, undefined);
-    }
-    const registry = await startRegistry(
-      JSON.stringify({ name: 'pi-background-tasks', version: '999.0.0' }),
-    );
-    process.env['PI_BG_REGISTRY_URL'] = registry.url;
-    const { session } = await harness();
-    const statuses: Array<string | undefined> = [];
-    const notifications: UiNotification[] = [];
-    session.extensionRunner.setUIContext(
-      makeStatusUi(session.extensionRunner.getUIContext(), statuses, notifications),
-    );
-    try {
-      const commands = session.extensionRunner
-        .getRegisteredCommands()
-        .map((cmd) => cmd.invocationName);
-      assert.ok(commands.includes('bg-update'), 'bg-update command must be registered');
-
-      await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
-      let footer: string | undefined;
-      for (let i = 0; i < 50; i++) {
-        await renderFooterViaJobs(session);
-        footer = statuses.at(-1);
-        if (footer?.includes('⬆ v999.0.0 /bg-update')) break;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      assert.match(footer ?? '', /bg \u2b06 v999\.0\.0 \/bg-update/);
-
-      // Append-to-active-footer path: segment trails the running/entry-hint status.
-      const running = await exec(session, 'bg_run', {
-        isAgent: false,
-        name: 'Update Footer Running',
-        command: `node -e ${JSON.stringify('setTimeout(() => {}, 10000)')}`,
-        notifyOnCompletion: false,
-        triggerOnCompletion: false,
-      });
-      await renderFooterViaJobs(session);
-      assert.match(statuses.at(-1) ?? '', /bg 1 running · Shift↓ · \u2b06 v999\.0\.0 \/bg-update/);
-      await exec(session, 'bg_kill', { taskId: taskFromResult(running).id });
-
-      const updateCommand = session.extensionRunner
-        .getRegisteredCommands()
-        .find((cmd) => cmd.invocationName === 'bg-update');
-      assert.ok(updateCommand);
-      await updateCommand.handler('', session.extensionRunner.createCommandContext());
-      const message = notifications.at(-1)?.message ?? '';
-      assert.match(message, /pi install npm:pi-background-tasks@latest/);
-      assert.match(message, /pi install npm:pi-background-tasks@999\.0\.0/);
-      assert.match(message, /pi install git:github\.com\/ismailsaleekh\/pi-background-tasks@main/);
-      assert.match(message, /first verify the tag exists/);
-      assert.doesNotMatch(message, /pi-background-tasks@v999\.0\.0/);
-      assert.match(message, /999\.0\.0 is the latest published version/);
-      assert.match(message, /does not install or self-update/);
-    } finally {
-      await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
-      session.dispose();
-      await registry.close();
-      for (const [key, value] of saved) {
-        restoreEnvValue(key, value);
-      }
-    }
-  });
-
-  void it('shows no update segment when opted out, offline, already current, or the registry fails, and never throws', async () => {
-    const newer = JSON.stringify({ version: '999.0.0' });
-    const disabled = await settledFooter({
-      env: { PI_BG_DISABLE_UPDATE_CHECK: '1' },
-      registryPayload: newer,
-    });
-    assert.equal(disabled.threw, false);
-    assert.doesNotMatch(disabled.status ?? '', /bg-update/);
-
-    const offline = await settledFooter({ env: { PI_OFFLINE: '1' }, registryPayload: newer });
-    assert.equal(offline.threw, false);
-    assert.doesNotMatch(offline.status ?? '', /bg-update/);
-
-    const packageInfoPayload = parseJsonText(
-      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
-    );
-    const currentVersion = parsePackageInfo(packageInfoPayload).version ?? '0.0.0';
-    const current = await settledFooter({
-      env: {},
-      registryPayload: JSON.stringify({ version: currentVersion }),
-    });
-    assert.equal(current.threw, false);
-    assert.doesNotMatch(current.status ?? '', /bg-update/);
-
-    const failure = await settledFooter({ env: {}, registryPayload: '{}', registryStatus: 500 });
-    assert.equal(failure.threw, false);
-    assert.doesNotMatch(failure.status ?? '', /bg-update/);
   });
 });

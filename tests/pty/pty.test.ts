@@ -6,10 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isolatedTestEnv, stripAnsi } from '../helpers/normalize.js';
-import { installFusionFakePi } from '../helpers/fusion-fake-pi.js';
-
 const extensionPath = resolve('extensions/background-tasks.ts');
-const scriptedProviderPath = resolve('tests/scripted-provider/scripted-provider-extension.ts');
 const expectBin = '/usr/bin/expect';
 
 const PTY_SKIP_REASON =
@@ -74,10 +71,7 @@ async function probePtyInput(): Promise<boolean> {
 
 interface RunExpectOptions {
   size?: { rows: number; cols: number } | undefined;
-  extensionPaths?: readonly string[] | undefined;
-  model?: string | undefined;
   env?: Readonly<Record<string, string>> | undefined;
-  fusionFakeMergedText?: string | undefined;
 }
 
 async function runExpect(
@@ -90,24 +84,16 @@ async function runExpect(
   const cwd = join(root, 'project');
   await mkdir(cwd, { recursive: true });
   const script = join(root, 'scenario.expect');
-  const fake =
-    options.fusionFakeMergedText === undefined
-      ? undefined
-      : await installFusionFakePi(root, { mergedText: options.fusionFakeMergedText });
   // Some scenarios (e.g. scrolling the tall detail view) need a taller pty so the
   // bottom-anchored dock is not clipped; stty_init must be set before spawn.
   const requestedSize = options.size ?? size;
   const sttyInit = requestedSize
     ? `set stty_init {rows ${String(requestedSize.rows)} columns ${String(requestedSize.cols)}}\n`
     : '';
-  const extensionArgs = (options.extensionPaths ?? [extensionPath])
-    .map((path) => `-e ${tclQuote(path)}`)
-    .join(' ');
-  const modelArg = options.model === undefined ? '' : ` --model ${tclQuote(options.model)}`;
+  const extensionArgs = `-e ${tclQuote(extensionPath)}`;
   const optionEnv = Object.entries(options.env ?? {})
     .map(([key, value]) => `set env(${key}) ${tclQuote(value)}`)
     .join('\n');
-  const pathEnv = fake === undefined ? '' : `set env(PATH) ${tclQuote(fake.env['PATH'] ?? '')}`;
   const content = `
 set timeout ${String(timeoutSeconds)}
 ${sttyInit}`;
@@ -120,9 +106,8 @@ set env(PI_CODING_AGENT_DIR) ${tclQuote(join(root, 'agent'))}
 set env(PI_CODING_AGENT_SESSION_DIR) ${tclQuote(join(root, 'sessions'))}
 set env(NPM_CONFIG_CACHE) "/tmp/pi-npm-cache"
 set env(TERM) "xterm-256color"
-${pathEnv}
 ${optionEnv}
-spawn -noecho /usr/local/bin/pi --offline --no-session --no-extensions ${extensionArgs} --no-skills --no-prompt-templates --no-context-files --no-tools${modelArg}
+spawn -noecho pi --offline --no-session --no-extensions ${extensionArgs} --no-skills --no-prompt-templates --no-context-files --no-tools
 expect {
   -re {\\[\\?u} { send "\\033\\[?0u"; exp_continue }
   -re {\\[c} { send "\\033\\[?1;2c"; exp_continue }
@@ -174,74 +159,6 @@ send "x"
       assert.match(output, /bg tasks focused|No background tasks/);
     },
   );
-
-  void it(
-    'launches Fusion in the background and renders terminal completion in the real TUI',
-    { timeout: 65_000 },
-    async (t) => {
-      if (!(await ptyInputSupported())) {
-        t.skip(PTY_SKIP_REASON);
-        return;
-      }
-      const output = await runExpect(
-        `
-send "/fusion pty fusion prompt"
-send "\\r"
-expect {
-  -re "Started fusion reason" {}
-  timeout { puts "FUSION_LAUNCH_TIMEOUT"; exit 41 }
-}
-expect {
-  -re "\\[bg completed\\].*fusion reason" {}
-  timeout { puts "FUSION_TERMINAL_TIMEOUT"; exit 42 }
-}
-`,
-        55,
-        undefined,
-        {
-          extensionPaths: [scriptedProviderPath, extensionPath],
-          model: 'pi-bg-scripted/scripted-model',
-          env: {
-            PI_BG_SCRIPTED_API_KEY: 'scripted-api-key',
-            PI_BG_SCRIPTED_SCENARIO: 'display-only-bg',
-          },
-          fusionFakeMergedText: 'PTY fused answer.',
-        },
-      );
-      assert.match(output, /Started fusion reason/);
-      assert.match(output, /\[bg completed\].*fusion reason/);
-    },
-  );
-
-  void it('opens the Fusion model selector in the real TUI', { timeout: 45_000 }, async (t) => {
-    if (!(await ptyInputSupported())) {
-      t.skip(PTY_SKIP_REASON);
-      return;
-    }
-    const output = await runExpect(
-      `
-send "/fusion-models"
-send "\\r"
-expect {
-  -re "Fusion models(.|\n)*Candidate 1(.|\n)*Evaluator" {}
-  timeout { puts "FUSION_MODELS_TIMEOUT"; exit 42 }
-}
-send "\\033"
-`,
-      35,
-      undefined,
-      {
-        extensionPaths: [scriptedProviderPath, extensionPath],
-        model: 'pi-bg-scripted/scripted-model',
-        env: {
-          PI_BG_SCRIPTED_API_KEY: 'scripted-api-key',
-          PI_BG_SCRIPTED_SCENARIO: 'display-only-bg',
-        },
-      },
-    );
-    assert.match(output, /Fusion models/);
-    assert.match(output, /Candidate 1/);
-  });
 
   void it(
     'opens the footer dock via Shift+Down after starting a named task',
