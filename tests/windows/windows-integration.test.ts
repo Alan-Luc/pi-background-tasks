@@ -433,7 +433,7 @@ void describe('windows integration', { concurrency: false }, () => {
       const pid = launched.pid;
       const nonce = launched.reloadSurvival?.launchNonce;
       await waitForCondition(
-        async () => (await readFile(join(h.cwd, launched.outputPath), 'utf8')).includes('before'),
+        async () => (await readFile(launched.outputPath, 'utf8')).includes('before'),
         'Windows pre-reload output',
       );
       await h.session.reload();
@@ -443,7 +443,7 @@ void describe('windows integration', { concurrency: false }, () => {
       assert.equal(claimed.reloadSurvival?.launchNonce, nonce);
       const terminal = await waitForWindowsTask(h.session, launched.id);
       assert.equal(terminal.status, 'completed');
-      assert.match(await readFile(join(h.cwd, launched.outputPath), 'utf8'), /before[\s\S]*after/u);
+      assert.match(await readFile(launched.outputPath, 'utf8'), /before[\s\S]*after/u);
       assert.equal(terminals.filter((task) => task.id === launched.id).length, 1);
     } finally {
       off();
@@ -537,7 +537,7 @@ void describe('windows integration', { concurrency: false }, () => {
       const cap = capped.reloadSurvival?.outputCapBytes;
       assert.equal(typeof cap, 'number');
       await waitForCondition(
-        async () => (await stat(join(h.cwd, capped.outputPath))).size >= Number(cap) * 0.5,
+        async () => (await stat(capped.outputPath)).size >= Number(cap) * 0.5,
         'first Windows cap segment',
       );
       await h.session.reload();
@@ -587,7 +587,7 @@ void describe('windows integration', { concurrency: false }, () => {
       const terminal = await waitForWindowsTask(h.session, launched.id);
       assert.equal(terminal.status, 'failed');
       assert.equal(terminal.exitCode, 9);
-      assert.match(await readFile(join(h.cwd, launched.outputPath), 'utf8'), /gap/u);
+      assert.match(await readFile(launched.outputPath, 'utf8'), /gap/u);
     } finally {
       release?.();
       h.loader.reload = originalReload;

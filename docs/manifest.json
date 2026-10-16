@@ -11,7 +11,7 @@
       "state": "missing"
     },
     {
-      "authored_body_sha256": "sha256:adef89fde8b63e5c82e4eb1aed9d17587dcce3c5f9dbab26edbf1166b1e9f685",
+      "authored_body_sha256": "sha256:0c6eee404bc163fd2a9062a25297766eba90c1fd955b5956827ce7165ca95707",
       "covers_sources": [
         "src/core/common.ts",
         "src/core/registry.ts",
@@ -684,7 +684,7 @@
       {
         "availability": "always",
         "default_available": true,
-        "description": "Start a named long-running shell command in the background and return immediately with a task ID and output path. By default, completed, failed, or killed terminal state is delivered automatically as <background-task-notification> and starts a follow-up agent turn; do not sleep or poll merely to wait. Output is written to .pi/tasks and model-visible logs are bounded to 50.0KB.",
+        "description": "Start a named long-running shell command in the background and return immediately with a task ID and output path. By default, completed, failed, or killed terminal state is delivered automatically as <background-task-notification> and starts a follow-up agent turn; do not sleep or poll merely to wait. Output is stored outside the project tree in a private temporary directory; model-visible logs are bounded to 50.0KB.",
         "id": "tool:bg_run",
         "kind": "tool",
         "label": "Background Run",

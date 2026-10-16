@@ -33,9 +33,9 @@ covers_sources: []
 | `path` | read | `src/core/common.ts:842` |
 | `Path` | read | `src/core/common.ts:842` |
 | `PATH` | read | `src/core/common.ts:842`<br>`src/core/common.ts:896`<br>`src/core/pi-launch.ts:425` |
-| `PI_BG_DISABLE_PI_TELEMETRY` | read | `src/core/registry.ts:233` |
+| `PI_BG_DISABLE_PI_TELEMETRY` | read | `src/core/registry.ts:234` |
 | `PI_BG_DOCK_SHORTCUT` | read | `src/core/config.ts:42` |
-| `PI_BG_MAX_OUTPUT_BYTES` | read | `src/core/registry.ts:59` |
+| `PI_BG_MAX_OUTPUT_BYTES` | read | `src/core/registry.ts:60` |
 | `PI_BG_POSIX_SHELL` | read | `src/core/common.ts:964` |
 | `PI_BG_POSIX_SHELL_PATH` | read | `src/core/common.ts:974` |
 | `PI_BG_SHELL` | read | `src/core/common.ts:921` |
@@ -48,9 +48,9 @@ covers_sources: []
 
 | Kind | Path/artifact | Provenance |
 | --- | --- | --- |
-| directory | `.pi/tasks/<session-id>-<pid>/` | `src/core/registry.ts:1179` |
-| task-file | `.pi/tasks/<session-id>-<pid>/<task-id>.json` | `src/core/registry.ts:1355` |
-| task-file | `.pi/tasks/<session-id>-<pid>/<task-id>.output` | `src/core/registry.ts:1354` |
+| directory | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/` | `src/core/registry.ts:1179` |
+| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.json` | `src/core/registry.ts:1355` |
+| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.output` | `src/core/registry.ts:1354` |
 
 ### Schema identifiers
 
@@ -86,10 +86,11 @@ covers_sources: []
 
 Tasks use the states `running`, `completed`, `failed`, and `killed`. Exact ids and unambiguous prefixes resolve task rows; unknown and ambiguous values fail loudly.
 
-Task files live under `.pi/tasks/<session-id>-<pid>/`:
+Task files live in a private directory under the canonical system temporary directory, named `pi-background-tasks-<session-id>-<pid>-<random>/`:
 
 - `<task-id>.output` contains the full local output stream;
-- `<task-id>.json` contains durable metadata and terminal state.
+- `<task-id>.json` contains durable metadata and terminal state;
+- public output paths are absolute.
 
 Model-visible log reads are bounded. Full output paths are retained in diagnostics rather than silently truncating data.
 

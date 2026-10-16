@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -332,6 +332,31 @@ async function startFakeTask(
 }
 
 void describe('BackgroundTaskRegistry', () => {
+  void it('stores concurrent task runtime files in one private temporary directory', async () => {
+    const h = await createHarness();
+    try {
+      const tasks = await Promise.all([
+        h.registry.startTask(h.ctx, 'node first.js', { name: 'First runtime task', isAgent: false }),
+        h.registry.startTask(h.ctx, 'node second.js', { name: 'Second runtime task', isAgent: false }),
+      ]);
+      const runtimeRoot = realpathSync(tmpdir());
+      for (const task of tasks) {
+        assert.ok(task.outputPath.startsWith(join(runtimeRoot, 'pi-background-tasks-')));
+        assert.equal(task.outputPath, task.outputAbsPath);
+        if (process.platform !== 'win32') assert.equal(statSync(dirname(task.outputAbsPath)).mode & 0o777, 0o700);
+      }
+      const [first, second] = tasks;
+      assert.equal(dirname(first.outputAbsPath), dirname(second.outputAbsPath));
+      assert.deepEqual(await filesBelow(join(h.cwd, '.pi')), []);
+      for (const { child } of h.children) child.close(0, null);
+      await waitFor(() => tasks.every((task) => task.status === 'completed'));
+      for (const task of tasks) assert.equal(await readFile(task.outputAbsPath, 'utf8'), '');
+    } finally {
+      h.registry.setShuttingDown(true);
+      await cleanup(h.root);
+    }
+  });
+
   void it('validates reload survival before admission, filesystem, insertion, wrapper, or spawn', async () => {
     const hub = createReloadShellOwnerHubForTests();
     const h = await createHarness({ reloadShellOwner: hub });
@@ -448,7 +473,6 @@ void describe('BackgroundTaskRegistry', () => {
   void it('retains a real failed-admission child owner until natural terminal settlement', async () => {
     if (process.platform === 'win32') return;
     const hub = createReloadShellOwnerHubForTests({ handoffTimeoutMs: 1000 });
-    let projectCwd = '';
     let child: ReturnType<typeof spawn> | undefined;
     const signals: string[] = [];
     const h = await createHarness({
@@ -456,7 +480,9 @@ void describe('BackgroundTaskRegistry', () => {
       stopWaitMs: 80,
       killGraceMs: 20,
       spawn: (command, args, options) => {
-        rmSync(join(projectCwd, '.pi'), { recursive: true, force: true });
+        const task = h.registry.allTasks().find((task) => task.status === 'running');
+        assert.ok(task, 'task should be registered before child spawn');
+        rmSync(dirname(task.outputAbsPath), { recursive: true, force: true });
         child = spawn(command, args, options);
         return child;
       },
@@ -465,7 +491,6 @@ void describe('BackgroundTaskRegistry', () => {
         return true;
       },
     });
-    projectCwd = h.cwd;
     const identity = makeReloadShellIdentity(h.ctx.sessionId ?? '', realpathSync(h.cwd));
     const claim = hub.beginActivation(identity, 'startup', '1'.repeat(32));
     const lease = hub.commitActivation(claim, await h.registry.stageReloadActivation(claim));
@@ -2268,7 +2293,7 @@ void describe('BackgroundTaskRegistry', () => {
     const metadataFailure = await createHarness();
     try {
       const { task, child } = await startFakeTask(metadataFailure, 'Metadata Failure');
-      await rm(join(metadataFailure.cwd, '.pi'), { recursive: true, force: true });
+      await rm(dirname(task.metadataAbsPath), { recursive: true, force: true });
       child.close(0, null);
       await waitFor(() => task.status === 'failed', 'metadata failure task completion');
       await waitFor(

@@ -217,16 +217,14 @@ void describe('scripted-provider shell policy guidance and execution', { concurr
           const taskId = String(second['taskId']);
           const outputPath = String(second['taskOutputPath']);
           assert.ok(taskId.startsWith('b'));
-          const metadata = await terminalMetadata(
-            join(h.cwd, outputPath.replace(/\.output$/u, '.json')),
-          );
+          const metadata = await terminalMetadata(outputPath.replace(/\.output$/u, '.json'));
           assert.equal(metadata['status'], 'completed');
           assert.deepEqual(metadata['shellPolicy'], taskPolicy);
           assert.deepEqual(JSON.parse(await readFile(argvPath, 'utf8')), [
             '-c',
             'shell_policy_probe Ω with spaces',
           ]);
-          assert.match(await readFile(join(h.cwd, outputPath), 'utf8'), /fake Nu selected Ω/u);
+          assert.match(await readFile(outputPath, 'utf8'), /fake Nu selected Ω/u);
         } finally {
           await h.dispose();
         }
@@ -270,10 +268,10 @@ void describe('scripted-provider shell policy guidance and execution', { concurr
         dialect: 'bash',
       });
       const outputPath = String(events[1]?.['taskOutputPath']);
-      const metadata = await terminalMetadata(join(h.cwd, outputPath.replace(/\.output$/u, '.json')));
+      const metadata = await terminalMetadata(outputPath.replace(/\.output$/u, '.json'));
       assert.equal(metadata['status'], 'completed');
       assert.deepEqual(metadata['shellPolicy'], receipt);
-      assert.match(await readFile(join(h.cwd, outputPath), 'utf8'), /real bash selected Ω with spaces/u);
+      assert.match(await readFile(outputPath, 'utf8'), /real bash selected Ω with spaces/u);
     } finally {
       await h.dispose();
     }

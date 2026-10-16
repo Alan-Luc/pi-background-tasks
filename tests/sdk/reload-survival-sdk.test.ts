@@ -507,7 +507,7 @@ void describe('real Pi reload shell survival', { concurrency: false }, () => {
       assert.equal(terminal.status, 'failed');
       assert.match(terminal.error ?? '', /Output exceeded cap of 1\.0KB/u);
       assert.equal(terminal.reloadSurvival?.outputCapBytes, 1024);
-      const output = await readFile(join(h.cwd, terminal.outputPath), 'utf8');
+      const output = await readFile(terminal.outputPath, 'utf8');
       assert.equal(output.startsWith('a'.repeat(700)), true);
       assert.equal(output.includes('b'.repeat(324)), true);
       assert.equal(output.includes('b'.repeat(325)), false);
@@ -591,7 +591,7 @@ void describe('real Pi reload shell survival', { concurrency: false }, () => {
         }),
       );
       const copiedMetadata = JSON.parse(
-        await readFile(join(h.cwd, survivor.outputPath.replace(/\.output$/u, '.json')), 'utf8'),
+        await readFile(survivor.outputPath.replace(/\.output$/u, '.json'), 'utf8'),
       ) as JsonRecord;
       const unrelated = spawn(
         process.execPath,

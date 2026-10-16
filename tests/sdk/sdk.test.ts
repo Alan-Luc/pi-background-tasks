@@ -428,7 +428,7 @@ function restoreEnvValue(key: string, value: string | undefined): void {
 
 void describe('sdk', () => {
   void it('registers only process commands, tools, shortcuts, and renderer and persists task output', async () => {
-    const { session, cwd } = await harness();
+    const { session } = await harness();
     try {
       assert.deepEqual(session.getActiveToolNames().sort(), [
         'bg_kill', 'bg_logs', 'bg_run', 'bg_status',
@@ -464,8 +464,8 @@ void describe('sdk', () => {
       assert.equal(task.status, 'completed');
       assert.equal(task.name, 'SDK Echo');
       assert.equal(task.isAgent, false);
-      assert.ok(existsSync(join(cwd, task.outputPath)));
-      const metadataPath = join(cwd, task.outputPath.replace(/\.output$/, '.json'));
+      assert.ok(existsSync(task.outputPath));
+      const metadataPath = task.outputPath.replace(/\.output$/, '.json');
       assert.ok(existsSync(metadataPath));
       const metadata = await readJsonWithStatus(metadataPath, 'completed');
       assert.equal(metadata['status'], 'completed');
@@ -605,7 +605,7 @@ void describe('sdk', () => {
       terminals.push(task);
       eventOrder.push(`terminal:${task.id}:${task.status}`);
     });
-    const { session, cwd } = await harness({ eventBus });
+    const { session } = await harness({ eventBus });
     try {
       await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
       const caps = await emitEventRequest(eventBus, 'sdk-cap', 'capabilities', {});
@@ -624,7 +624,7 @@ void describe('sdk', () => {
         task.status === 'running' || task.status === 'completed',
         `immediate run response status should be a valid launch snapshot, got ${task.status}`,
       );
-      assert.ok(existsSync(join(cwd, task.outputPath)));
+      assert.ok(existsSync(task.outputPath));
       const terminal = await waitForTerminalSnapshot(terminals, task.id);
       assert.equal(terminal.status, 'completed');
       assert.equal(terminals.filter((entry) => entry.id === task.id).length, 1);
@@ -1009,7 +1009,7 @@ void describe('sdk', () => {
   });
 
   void it('captures only task-owned explicit telemetry in snapshots and metadata', async () => {
-    const { session, cwd } = await harness();
+    const { session } = await harness();
     try {
       const tool = session.getToolDefinition('bg_run');
       assert.ok(tool, 'bg_run tool should be registered');
@@ -1047,7 +1047,7 @@ void describe('sdk', () => {
       assert.match(resultText(status), /model=test-provider\/test-model/);
       assert.match(resultText(status), /tokens=1\.3k/);
       assert.match(resultText(status), /tools=2 failed=1/);
-      const metadataPath = join(cwd, t.outputPath.replace(/\.output$/, '.json'));
+      const metadataPath = t.outputPath.replace(/\.output$/, '.json');
       let metadata = parseJsonObject(
         await readFile(metadataPath, 'utf8'),
         'telemetry metadata should be an object',
@@ -1181,7 +1181,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       assert.doesNotMatch(logText, /background-task-telemetry/);
       assert.doesNotMatch(logText, /background-task-context-usage/);
       assert.doesNotMatch(logText, /background-task-activity/);
-      const metadataPath = join(cwd, t.outputPath.replace(/\.output$/, '.json'));
+      const metadataPath = t.outputPath.replace(/\.output$/, '.json');
       const metadata = parseJsonObject(
         await readFile(metadataPath, 'utf8'),
         'wrapped Pi metadata should be an object',
@@ -1427,7 +1427,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
     } else {
       process.env['SHELL'] = '/definitely/missing/pi-bg-shell';
     }
-    const { session, cwd } = await harness();
+    const { session } = await harness();
     try {
       const r = await exec(session, 'bg_run', {
         isAgent: false,
@@ -1439,7 +1439,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       const t = await wait(session, taskFromResult(r).id);
       assert.equal(t.status, 'failed');
       assert.match(t.error ?? '', /ENOENT|no such file/i);
-      const metadataPath = join(cwd, t.outputPath.replace(/\.output$/, '.json'));
+      const metadataPath = t.outputPath.replace(/\.output$/, '.json');
       const metadata = await readJsonWithStatus(metadataPath, 'failed');
       assert.equal(metadata['status'], 'failed');
     } finally {

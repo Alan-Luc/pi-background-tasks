@@ -14,7 +14,7 @@ covers_sources: []
 - Source: `src/extension.ts:762`
 - Availability: `always`
 - Available by default: **yes**
-- Description: Start a named long-running shell command in the background and return immediately with a task ID and output path. By default, completed, failed, or killed terminal state is delivered automatically as <background-task-notification> and starts a follow-up agent turn; do not sleep or poll merely to wait. Output is written to .pi/tasks and model-visible logs are bounded to 50.0KB.
+- Description: Start a named long-running shell command in the background and return immediately with a task ID and output path. By default, completed, failed, or killed terminal state is delivered automatically as <background-task-notification> and starts a follow-up agent turn; do not sleep or poll merely to wait. Output is stored outside the project tree in a private temporary directory; model-visible logs are bounded to 50.0KB.
 - Root schema: `object`
 
 | Field | Required | Type | Description | Constraints |

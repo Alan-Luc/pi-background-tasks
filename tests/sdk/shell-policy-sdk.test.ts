@@ -183,7 +183,7 @@ void describe('shell policy SDK activation lifecycle', { concurrency: false }, (
         assert.deepEqual(firstTerminal['shellPolicy'], firstPolicy);
         assert.deepEqual(JSON.parse(await readFile(firstArgv, 'utf8')), ['-c', commandOne]);
         assert.equal(existsSync(secondArgv), false, 'env mutation must not drift this activation');
-        assert.match(await readFile(join(cwd, String(first['outputPath'])), 'utf8'), /first activation Ω/u);
+        assert.match(await readFile(String(first['outputPath']), 'utf8'), /first activation Ω/u);
 
         await session.reload();
         const commandTwo = `printf '%s\\n' 'reloaded activation Ω with spaces'`;
@@ -197,7 +197,7 @@ void describe('shell policy SDK activation lifecycle', { concurrency: false }, (
         assert.deepEqual(secondTerminal['shellPolicy'], secondPolicy);
         assert.deepEqual(JSON.parse(await readFile(secondArgv, 'utf8')), ['-c', commandTwo]);
         assert.match(
-          await readFile(join(cwd, String(second['outputPath'])), 'utf8'),
+          await readFile(String(second['outputPath']), 'utf8'),
           /reloaded activation Ω/u,
         );
       } finally {

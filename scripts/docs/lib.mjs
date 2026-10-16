@@ -1951,9 +1951,9 @@ function dedupeByName(items) {
 function runtimeArtifacts(ts, root) {
   const sourceText = (rel, needle) => lineForText(root, rel, needle);
   const items = [
-    { kind: 'directory', value: '.pi/tasks/<session-id>-<pid>/', source: sourceText('src/core/registry.ts', "join(ctx.cwd, '.pi', 'tasks'") },
-    { kind: 'task-file', value: '.pi/tasks/<session-id>-<pid>/<task-id>.output', source: sourceText('src/core/registry.ts', 'const outputAbsPath = join(dir.abs') },
-    { kind: 'task-file', value: '.pi/tasks/<session-id>-<pid>/<task-id>.json', source: sourceText('src/core/registry.ts', 'const metadataAbsPath = join(dir.abs') },
+    { kind: 'directory', value: '<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/', source: sourceText('src/core/registry.ts', 'const runtimeDirAbs = mkdtempSync') },
+    { kind: 'task-file', value: '<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.output', source: sourceText('src/core/registry.ts', 'const outputAbsPath = join(dir.abs') },
+    { kind: 'task-file', value: '<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.json', source: sourceText('src/core/registry.ts', 'const metadataAbsPath = join(dir.abs') },
   ];
   return items.sort((a, b) => a.kind.localeCompare(b.kind) || a.value.localeCompare(b.value));
 }

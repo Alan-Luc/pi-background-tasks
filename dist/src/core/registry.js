@@ -1,8 +1,9 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createWriteStream, existsSync, mkdtempSync, realpathSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { formatSize } from '@earendil-works/pi-coding-agent';
 import { boundedRead, deriveTaskNameFromCommand, escapeXml, formatAgentActivityLine, formatDuration, isJsonObject, normalizeTaskName, parseAgentActivity, parseJsonText, resolveShellPolicy, sanitizePathSegment, shellInvocationForPolicy, shellPolicySnapshot, shellQuote, snapshot, taskDisplayName, ReloadSurvivalError, } from './common.js';
 import { closeAndFsyncOutputStream, writeJsonAtomic } from './task-durable.js';
@@ -871,11 +872,8 @@ export class BackgroundTaskRegistry {
         if (this.runtimeDir)
             return this.runtimeDir;
         const sessionId = sanitizePathSegment(ctx.sessionId ?? `session-${String(process.pid)}`);
-        const runId = `${sessionId}-${String(process.pid)}`;
-        const runtimeDirAbs = join(ctx.cwd, '.pi', 'tasks', runId);
-        const runtimeDirDisplay = join('.pi', 'tasks', runId);
-        await mkdir(runtimeDirAbs, { recursive: true });
-        this.runtimeDir = { abs: runtimeDirAbs, display: runtimeDirDisplay };
+        const runtimeDirAbs = mkdtempSync(join(realpathSync(tmpdir()), `pi-background-tasks-${sessionId}-${String(process.pid)}-`));
+        this.runtimeDir = { abs: runtimeDirAbs, display: runtimeDirAbs };
         return this.runtimeDir;
     }
     async destroyTaskStream(task) {

@@ -11,7 +11,7 @@ covers_sources: [src/core/common.ts, src/core/registry.ts, src/core/reload-shell
 
 The runtime owns task identity, shell invocation, process lifecycle, bounded logs, metadata, telemetry, completion publication, and platform termination.
 
-Task states are `running`, `completed`, `failed`, and `killed`. Task files live under `.pi/tasks/<session-id>-<pid>/` as `<task-id>.output` and `<task-id>.json`. Exact ids and unambiguous prefixes resolve rows; unknown and ambiguous ids fail loudly.
+Task states are `running`, `completed`, `failed`, and `killed`. Each registry stores task files in a private directory under the canonical system temporary directory, named `pi-background-tasks-<session-id>-<pid>-<random>/`, as `<task-id>.output` and `<task-id>.json`. Public output paths are absolute. Exact ids and unambiguous prefixes resolve rows; unknown and ambiguous ids fail loudly.
 
 Shell commands use structured spawn arguments, the activation-selected shell, the project cwd, and detached process groups where supported. They are not sandboxed. Timeouts, output caps, spawn failures, tree termination failures, metadata failures, and publication failures remain explicit.
 
