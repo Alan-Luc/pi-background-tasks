@@ -1282,7 +1282,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       });
       await wait(session, taskFromResult(done).id);
       await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.match(statuses.at(-1) ?? '', /bg 1 done · Shift↓ · \/bg-clear/);
+      assert.match(statuses.at(-1) ?? '', /bg 0 running │ finished unread: 1 done · Shift↓ · \/bg-clear/);
 
       const shortcuts = session.extensionRunner.getShortcuts({});
       assert.ok(shortcuts.has('ctrl+alt+c'));
@@ -1291,7 +1291,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
         .find((cmd) => cmd.invocationName === 'bg-clear');
       assert.ok(clearCommand);
       await clearCommand.handler('', session.extensionRunner.createCommandContext());
-      assert.equal(statuses.at(-1), undefined);
+      assert.match(statuses.at(-1) ?? '', /bg 0 running · Shift↓/);
       assert.match(notifications.at(-1)?.message ?? '', /Cleared 1 finished/);
 
       const running = await exec(session, 'bg_run', {
@@ -1310,7 +1310,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       });
       await wait(session, taskFromResult(secondDone).id);
       await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.match(statuses.at(-1) ?? '', /1 running · 1 done · Shift↓ · \/bg-clear/);
+      assert.match(statuses.at(-1) ?? '', /bg 1 running │ finished unread: 1 done · Shift↓ · \/bg-clear/);
       await clearCommand.handler('', session.extensionRunner.createCommandContext());
       assert.match(statuses.at(-1) ?? '', /bg 1 running · Shift↓/);
       assert.doesNotMatch(statuses.at(-1) ?? '', /done|\/bg-clear/);
@@ -1356,7 +1356,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       });
       await wait(session, taskFromResult(done).id);
       await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.match(statuses.at(-1) ?? '', /1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/);
+      assert.match(statuses.at(-1) ?? '', /bg 0 running │ finished unread: 1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/);
 
       const running = await exec(session, 'bg_run', {
         isAgent: false,
@@ -1368,7 +1368,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       await new Promise((resolve) => setTimeout(resolve, 30));
       assert.match(
         statuses.at(-1) ?? '',
-        /1 running · 1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/,
+        /bg 1 running │ finished unread: 1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/,
       );
       const shortcuts = session.extensionRunner.getShortcuts({});
       const shiftDown = shortcuts.get('shift+down');
@@ -1377,7 +1377,7 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       assert.ok(
         statuses.some(
           (status) =>
-            status?.includes('bg 1 running · 1 failed · 1 stopped · 1 done · focused') ?? false,
+            status?.includes('bg 1 running │ finished unread: 1 failed · 1 stopped · 1 done · focused') ?? false,
         ),
       );
       await exec(session, 'bg_kill', { taskId: taskFromResult(running).id });

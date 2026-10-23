@@ -389,20 +389,15 @@ export default async function backgroundTasksExtension(pi: ExtensionAPI): Promis
       );
       const unseenFinishedCount = unseenFailed.length + unseenStopped.length + unseenDone.length;
       ctx.ui.setWidget('background-tasks', undefined);
-      if (running.length === 0 && unseenFinishedCount === 0) {
-        ctx.ui.setStatus('background-tasks', undefined);
-        return;
-      }
-
       const parts: string[] = [];
-      if (running.length > 0) parts.push(`${String(running.length)} running`);
       if (unseenFailed.length > 0) parts.push(`${String(unseenFailed.length)} failed`);
       if (unseenStopped.length > 0) parts.push(`${String(unseenStopped.length)} stopped`);
       if (unseenDone.length > 0) parts.push(`${String(unseenDone.length)} done`);
       const entryHint = dockOpen
         ? 'focused'
         : `${dockEntryHint}${unseenFinishedCount > 0 ? ' · /bg-clear' : ''}`;
-      const label = ` bg ${[...parts, entryHint].join(' · ')} `;
+      const finished = parts.length > 0 ? ` │ finished unread: ${parts.join(' · ')}` : '';
+      const label = ` bg ${String(running.length)} running${finished} · ${entryHint} `;
       ctx.ui.setStatus('background-tasks', lightBlue(label));
     } catch (error) {
       console.error(

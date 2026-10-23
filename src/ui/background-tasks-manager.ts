@@ -609,11 +609,10 @@ export class BackgroundTasksManager implements Component {
       (task) => task.status === 'completed' && !this.options.isSeen(task.id),
     ).length;
     const unread = unseenFailed + unseenStopped + unseenDone;
-    const subtitleParts = this.showHistory
-      ? [`${formatCount(allRunning)} active`, `${formatCount(historyCount)} history`]
-      : allRunning > 0
-        ? [`${formatCount(allRunning)} active shell${pluralSuffix(allRunning)}`]
-        : ['No active shells'];
+    const subtitleParts = [
+      `${formatCount(allRunning)} running`,
+      `${formatCount(historyCount)} finished`,
+    ];
     if (unseenFailed) subtitleParts.push(`${formatCount(unseenFailed)} failed`);
     if (unseenStopped) subtitleParts.push(`${formatCount(unseenStopped)} stopped`);
     if (unseenDone) subtitleParts.push(`${formatCount(unseenDone)} done`);

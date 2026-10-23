@@ -271,13 +271,7 @@ export default async function backgroundTasksExtension(pi) {
             const unseenDone = allTasks.filter((task) => task.status === 'completed' && !seenTaskIds.has(task.id));
             const unseenFinishedCount = unseenFailed.length + unseenStopped.length + unseenDone.length;
             ctx.ui.setWidget('background-tasks', undefined);
-            if (running.length === 0 && unseenFinishedCount === 0) {
-                ctx.ui.setStatus('background-tasks', undefined);
-                return;
-            }
             const parts = [];
-            if (running.length > 0)
-                parts.push(`${String(running.length)} running`);
             if (unseenFailed.length > 0)
                 parts.push(`${String(unseenFailed.length)} failed`);
             if (unseenStopped.length > 0)
@@ -287,7 +281,8 @@ export default async function backgroundTasksExtension(pi) {
             const entryHint = dockOpen
                 ? 'focused'
                 : `${dockEntryHint}${unseenFinishedCount > 0 ? ' · /bg-clear' : ''}`;
-            const label = ` bg ${[...parts, entryHint].join(' · ')} `;
+            const finished = parts.length > 0 ? ` │ finished unread: ${parts.join(' · ')}` : '';
+            const label = ` bg ${String(running.length)} running${finished} · ${entryHint} `;
             ctx.ui.setStatus('background-tasks', lightBlue(label));
         }
         catch (error) {

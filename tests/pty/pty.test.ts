@@ -136,6 +136,47 @@ exit 0
 }
 
 void describe('interactive PTY', () => {
+  void it('keeps the real footer running count separate from finished notices', { timeout: 45_000 }, async (t) => {
+    if (!(await ptyInputSupported())) {
+      t.skip(PTY_SKIP_REASON);
+      return;
+    }
+    const output = await runExpect(
+      `
+expect {
+  -re "bg 0 running" {}
+  timeout { puts "IDLE_FOOTER_TIMEOUT"; exit 40 }
+}
+send {/bg --name "PTY Visibility" sleep 2}
+send "\\r"
+expect {
+  -re "bg 1 running" {}
+  timeout { puts "RUNNING_FOOTER_TIMEOUT"; exit 41 }
+}
+expect {
+  -re "bg 0 running.*finished unread: 1 done" {}
+  timeout { puts "FINISHED_FOOTER_TIMEOUT"; exit 42 }
+}
+send "/bg-clear"
+send "\\r"
+expect {
+  -re "Cleared 1 finished" {}
+  timeout { puts "CLEAR_NOTICE_TIMEOUT"; exit 43 }
+}
+expect {
+  -re "bg 0 running · Shift↓" {}
+  timeout { puts "CLEARED_IDLE_FOOTER_TIMEOUT"; exit 44 }
+}
+`,
+      30,
+      { rows: 40, cols: 120 },
+    );
+    assert.match(output, /bg 1 running/);
+    assert.match(output, /bg 0 running │ finished unread: 1 done/);
+    assert.match(output, /Cleared 1 finished/);
+    assert.match(output, /bg 0 running · Shift↓/);
+  });
+
   void it(
     'opens the focused dock from /tasks and closes with x',
     { timeout: 45_000 },

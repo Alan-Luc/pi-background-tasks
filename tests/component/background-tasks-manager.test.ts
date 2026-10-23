@@ -176,6 +176,29 @@ function assertWidth(lines: string[], width: number) {
 }
 
 void describe('BackgroundTasksManager component', () => {
+  void it('separates running jobs from finished notices as the last job exits', () => {
+    const running = task({ id: 'brunning1' });
+    const finished = task({ id: 'bfinished', status: 'completed', exitCode: 0 });
+    const h = manager({}, [running, finished]);
+    try {
+      let text = stripAnsi(h.instance.render(100).join('\n'));
+      assert.match(text, /1 running · 1 finished · 1 done · 1 unread/);
+      assert.doesNotMatch(text, /bfinished/);
+      running.status = 'completed';
+      running.exitCode = 0;
+      text = stripAnsi(h.instance.render(100).join('\n'));
+      assert.match(text, /0 running · 2 finished · 2 done · 2 unread/);
+      assert.match(text, /bfinished/);
+      h.seen.add(running.id);
+      h.seen.add(finished.id);
+      text = stripAnsi(h.instance.render(100).join('\n'));
+      assert.match(text, /0 running · 2 finished/);
+      assert.doesNotMatch(text, /unread/);
+    } finally {
+      h.instance.dispose();
+    }
+  });
+
   void it('passes the selected survival flag to dock rerun and accepts a new id/nonce', async () => {
     const original = task({
       id: 'bsurvive1',
@@ -236,6 +259,7 @@ void describe('BackgroundTasksManager component', () => {
     try {
       const lines = h.instance.render(90);
       assert.match(stripAnsi(lines.join('\n')), /bg tasks focused/);
+      assert.match(stripAnsi(lines.join('\n')), /2 running · 0 finished/);
       assert.match(stripAnsi(lines.join('\n')), /First Task/);
       assertWidth(lines, 90);
 
@@ -451,6 +475,7 @@ void describe('BackgroundTasksManager component', () => {
     const h = manager({}, []);
     try {
       const text = stripAnsi(h.instance.render(72).join('\n'));
+      assert.match(text, /0 running · 0 finished/);
       assert.match(text, /No background tasks/);
       h.instance.handleInput('h');
       assert.match(stripAnsi(h.instance.render(72).join('\n')), /No background tasks/);
@@ -471,6 +496,7 @@ void describe('BackgroundTasksManager component', () => {
     const hf = manager({}, finished);
     try {
       const text = stripAnsi(hf.instance.render(80).join('\n'));
+      assert.match(text, /0 running · 1 finished/);
       assert.match(text, /1 failed/);
       assert.match(text, /1 unread/);
       assert.match(text, /●/);
