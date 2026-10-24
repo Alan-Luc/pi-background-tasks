@@ -35,11 +35,13 @@ function setup(tasks: BgTaskSnapshot[]) {
 }
 
 void describe('BackgroundTasksSidebar', () => {
-  void it('renders a native right-aligned widget with compact tree rows above the editor', () => {
+  void it('renders pi-tasks icon rows with a compact count and no redundant status or hint', () => {
     const view = setup([task('run', 'running', 'Native job')]);
     const lines = view.sidebar.render(120);
-    assert.match(lines.join('\n'), /● Background jobs · 1 running/);
-    assert.match(lines.join('\n'), /└─ Native job · running/);
+    assert.deepEqual(lines.map((line) => line.slice(84)), [
+      '● Background jobs (1)',
+      '  ✳ Native job',
+    ]);
     assert.ok(lines.every((line) => line.startsWith(' '.repeat(84))));
     assert.ok(lines.every((line) => visibleWidth(line) <= 120));
     assert.equal(view.overlays(), 0);
@@ -62,10 +64,10 @@ void describe('BackgroundTasksSidebar', () => {
   void it('limits active rows to five and reports the total and overflow', () => {
     const view = setup(Array.from({ length: 7 }, (_, i) => task(`Run ${i + 1}`, 'running')));
     const lines = view.sidebar.render(36);
-    assert.match(lines[0] ?? '', /7 running/);
+    assert.match(lines[0] ?? '', /Background jobs \(7\)/);
     assert.equal(lines.filter((line) => /Run [1-5]/.test(line)).length, 5);
     assert.doesNotMatch(lines.join('\n'), /Run [67]/);
-    assert.match(lines.at(-1) ?? '', /\+2 more · \/tasks/);
+    assert.match(lines.at(-1) ?? '', /… and 2 more/);
   });
 
   void it('uses available native width, including terminals narrower than 100 columns', () => {
@@ -76,7 +78,7 @@ void describe('BackgroundTasksSidebar', () => {
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
       assert.ok(lines.every((line) => line.startsWith(' '.repeat(Math.max(0, width - 36)))));
     }
-    assert.match(view.sidebar.render(36)[1] ?? '', /running$/);
+    assert.match(view.sidebar.render(36)[1] ?? '', /^  ✳ 界/);
   });
 
   void it('sanitizes malicious names and excludes output and telemetry', () => {
@@ -85,6 +87,46 @@ void describe('BackgroundTasksSidebar', () => {
     assert.match(text, /safe.*RED/);
     assert.doesNotMatch(text, /[\u001b\u0007\u009b]/);
     assert.doesNotMatch(text, /SECRET_COMMAND|SECRET_MODEL|\/secret\/|42/);
+  });
+
+  void it('animates visible running jobs and stops ticking when idle, hidden, or disposed', async () => {
+    const running = task('active', 'running', 'Animated job');
+    const view = setup([running]);
+    const waitForFrame = () => new Promise((resolve) => setTimeout(resolve, 180));
+    try {
+      view.sidebar.refresh();
+      const first = view.sidebar.render(120);
+      await waitForFrame();
+      assert.notDeepEqual(view.sidebar.render(120), first, 'running icon advances without task output');
+      assert.ok(view.renders() > 1, 'animation requests a native render');
+
+      running.status = 'completed';
+      view.sidebar.refresh();
+      const idleRenders = view.renders();
+      await waitForFrame();
+      assert.equal(view.renders(), idleRenders, 'no animation timer remains when idle');
+      assert.deepEqual(view.sidebar.render(120), []);
+
+      running.status = 'running';
+      view.sidebar.refresh();
+      view.setManagerOpen(true);
+      view.sidebar.refresh();
+      const hiddenRenders = view.renders();
+      await waitForFrame();
+      assert.equal(view.renders(), hiddenRenders, 'manager hides and stops the animation');
+
+      view.setManagerOpen(false);
+      view.sidebar.refresh();
+      const restarted = view.sidebar.render(120);
+      await waitForFrame();
+      assert.notDeepEqual(view.sidebar.render(120), restarted, 'visible activity restarts animation');
+      view.sidebar.dispose();
+      const disposedRenders = view.renders();
+      await waitForFrame();
+      assert.equal(view.renders(), disposedRenders, 'disposal clears the animation timer');
+    } finally {
+      view.sidebar.dispose();
+    }
   });
 
   void it('hides while the manager is open and stops rendering or refreshing after disposal', () => {

@@ -162,7 +162,7 @@ expect {
 send {/bg --name "PTY Native" sleep 3}
 send "\\r"
 expect {
-  -re "Background jobs(.|\\n)*1 running(.|\\n)*PTY Native(.|\\n)*running" {}
+  -re {Background jobs [(]1[)](.|\\n)*[✳✴✵✶✷✸✹✺✻✼✽] PTY Native} {}
   timeout { puts "RUNNING_WIDGET_TIMEOUT"; exit 41 }
 }
 send "/bg-clear"

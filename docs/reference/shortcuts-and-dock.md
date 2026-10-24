@@ -21,6 +21,6 @@ covers_sources: []
 
 `Ctrl+Alt+C` is separate from dock selection and clears finished notices as a terminal-dependent fallback for `/bg-clear`.
 
-Running jobs appear in a compact right-aligned native widget above the editor, with themed tree rows and no progress output. It participates in Pi's layout without covering the transcript or taking keyboard focus. It disappears when no jobs are running or while the task manager is open. There is no terminal-size cutoff, floating overlay, or background-task footer badge.
+Running jobs appear in a compact right-aligned native widget above the editor, with pi-tasks-style animated icons, accented job names, and no progress output. It participates in Pi's layout without covering the transcript or taking keyboard focus. It disappears when no jobs are running or while the task manager is open. There is no terminal-size cutoff, floating overlay, or background-task footer badge.
 
 Completed history and finished notices remain in `/tasks`. Opening task detail marks that task seen; list navigation alone does not clear notices. `/bg-clear` clears finished notices without stopping running jobs.

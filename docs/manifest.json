@@ -37,7 +37,7 @@
       "state": "missing"
     },
     {
-      "authored_body_sha256": "sha256:6abd7f3abbe213d823d9def7a441f071bea5066c0d4a8d627b47c8d203d8cadd",
+      "authored_body_sha256": "sha256:535c2da3e2227f4c32054566541a21ffac09b8a4683560df99c21e1db5cc152e",
       "covers_sources": [
         "extensions/background-tasks.ts",
         "src/core/config.ts",
