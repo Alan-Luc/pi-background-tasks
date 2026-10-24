@@ -72,6 +72,7 @@ async function probePtyInput(): Promise<boolean> {
 interface RunExpectOptions {
   size?: { rows: number; cols: number } | undefined;
   env?: Readonly<Record<string, string>> | undefined;
+  rawOutput?: boolean | undefined;
 }
 
 async function runExpect(
@@ -129,52 +130,76 @@ exit 0
     });
     const output = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 0, stripAnsi(output));
-    return stripAnsi(output).replace(/\r/g, '');
+    return options.rawOutput ? output : stripAnsi(output).replace(/\r/g, '');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
 void describe('interactive PTY', () => {
-  void it('keeps the real footer running count separate from finished notices', { timeout: 45_000 }, async (t) => {
+  void it('shows the passive sidebar through idle, running, finish, and clear while commands remain usable', { timeout: 45_000 }, async (t) => {
     if (!(await ptyInputSupported())) {
       t.skip(PTY_SKIP_REASON);
       return;
     }
     const output = await runExpect(
       `
-expect {
-  -re "bg 0 running" {}
-  timeout { puts "IDLE_FOOTER_TIMEOUT"; exit 40 }
-}
-send {/bg --name "PTY Visibility" sleep 2}
+send {/bg --name "PTY Visibility" sleep 8}
 send "\\r"
 expect {
-  -re "bg 1 running" {}
-  timeout { puts "RUNNING_FOOTER_TIMEOUT"; exit 41 }
+  -re "1 running(.|\\n)*PTY Visibility(.|\\n)*running" {}
+  timeout { puts "RUNNING_SIDEBAR_TIMEOUT"; exit 42 }
+}
+send "/bg-clear"
+send "\\r"
+expect {
+  -re "No finished background task notices" {}
+  timeout { puts "INPUT_WHILE_VISIBLE_TIMEOUT"; exit 43 }
 }
 expect {
-  -re "bg 0 running.*finished unread: 1 done" {}
-  timeout { puts "FINISHED_FOOTER_TIMEOUT"; exit 42 }
+  -re "PTY Visibility(.|\\n)*done" {}
+  timeout { puts "FINISHED_SIDEBAR_TIMEOUT"; exit 44 }
 }
 send "/bg-clear"
 send "\\r"
 expect {
   -re "Cleared 1 finished" {}
-  timeout { puts "CLEAR_NOTICE_TIMEOUT"; exit 43 }
-}
-expect {
-  -re "bg 0 running · Shift↓" {}
-  timeout { puts "CLEARED_IDLE_FOOTER_TIMEOUT"; exit 44 }
+  timeout { puts "CLEAR_NOTICE_TIMEOUT"; exit 45 }
 }
 `,
-      30,
+      35,
       { rows: 40, cols: 120 },
+      { rawOutput: true },
     );
-    assert.match(output, /bg 1 running/);
-    assert.match(output, /bg 0 running │ finished unread: 1 done/);
-    assert.match(output, /Cleared 1 finished/);
-    assert.match(output, /bg 0 running · Shift↓/);
+    assert.match(stripAnsi(output), /Background jobs/);
+    assert.match(stripAnsi(output), /No jobs running/);
+    assert.match(stripAnsi(output), /PTY Visibility/);
+    assert.match(stripAnsi(output), /Cleared 1 finished/);
+    assert.doesNotMatch(output, /bg [0-9]+ running/);
+    assert.doesNotMatch(output, /48;2;183;223;255/);
+  });
+
+  void it('hides the sidebar on an 80-column terminal while keeping /tasks available', { timeout: 45_000 }, async (t) => {
+    if (!(await ptyInputSupported())) {
+      t.skip(PTY_SKIP_REASON);
+      return;
+    }
+    const output = await runExpect(
+      `
+send "/tasks"
+send "\\r"
+expect {
+  -re "bg tasks focused|No background tasks" {}
+  timeout { puts "NARROW_TASKS_TIMEOUT"; exit 46 }
+}
+send "x"
+`,
+      30,
+      { rows: 40, cols: 80 },
+      { rawOutput: true },
+    );
+    assert.match(stripAnsi(output), /bg tasks focused|No background tasks/);
+    assert.doesNotMatch(stripAnsi(output), /Background jobs/);
   });
 
   void it(
@@ -202,7 +227,7 @@ send "x"
   );
 
   void it(
-    'opens the footer dock via Shift+Down after starting a named task',
+    'opens the task manager via Shift+Down after starting a named task',
     { timeout: 55_000 },
     async (t) => {
       if (!(await ptyInputSupported())) {

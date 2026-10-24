@@ -8,7 +8,8 @@ import { BackgroundTaskRegistry } from './core/registry.js';
 import { getProcessReloadShellOwnerV1, makeReloadShellIdentity, } from './core/reload-shell-owner.js';
 import { createShellPolicyGuidanceHandler, initializeShellPolicy } from './core/shell-policy.js';
 import { installBackgroundTaskExtensionApi, } from './core/extension-api.js';
-import { dockShortcutFooterHint, parseBackgroundTasksConfig } from './core/config.js';
+import { BackgroundTasksSidebar } from './ui/background-tasks-sidebar.js';
+import { parseBackgroundTasksConfig } from './core/config.js';
 import { LazyModule, SynchronousActivationCloseFence } from './core/lazy-module.js';
 /**
  * Project-local Pi background task manager.
@@ -20,14 +21,7 @@ import { LazyModule, SynchronousActivationCloseFence } from './core/lazy-module.
  *   fresh extension activation on real same-process reload only.
  * - No PID/file adoption, process-restart survival, or crash recovery.
  */
-const STATUS_INTERVAL_MS = 1000;
 const COMMAND_PREVIEW_CHARS = 90;
-const LIGHT_BLUE_BG = '\x1b[48;2;183;223;255m';
-const LIGHT_BLUE_FG = '\x1b[38;2;11;70;110m';
-const ANSI_RESET = '\x1b[0m';
-function lightBlue(value) {
-    return `${LIGHT_BLUE_BG}${LIGHT_BLUE_FG}${value}${ANSI_RESET}`;
-}
 function textContent(text) {
     return [{ type: 'text', text }];
 }
@@ -37,7 +31,7 @@ function optionalTrimmed(value) {
 }
 const BgRunParams = Type.Object({
     name: Type.String({
-        description: 'Short human-readable task name shown in the bg footer dock. Required; use 2-6 words, not the raw command.',
+        description: 'Short human-readable task name shown in the background task sidebar. Required; use 2-6 words, not the raw command.',
     }),
     command: Type.String({ description: 'Shell command to start in the background' }),
     isAgent: Type.Boolean({
@@ -80,7 +74,6 @@ function renderPlainResult(result, options, theme) {
 }
 export default async function backgroundTasksExtension(pi) {
     const config = parseBackgroundTasksConfig();
-    const dockEntryHint = dockShortcutFooterHint(config.dockShortcut);
     const shellPolicy = initializeShellPolicy();
     const reloadShellOwner = getProcessReloadShellOwnerV1();
     pi.on('before_agent_start', createShellPolicyGuidanceHandler(shellPolicy));
@@ -91,7 +84,8 @@ export default async function backgroundTasksExtension(pi) {
     let activationIdentity;
     let pendingActivationClaim;
     let dockOpen = false;
-    let statusInterval;
+    let sidebar;
+    let sidebarUi;
     let disposed = false;
     let shutdownCleanupStarted = false;
     let reloadHandoffFailed = false;
@@ -158,10 +152,11 @@ export default async function backgroundTasksExtension(pi) {
         // racing continuation is still disposed rather than hidden by idempotence.
         currentCtx = undefined;
         currentRegistryCtx = undefined;
-        if (statusInterval !== undefined) {
-            clearInterval(statusInterval);
-            statusInterval = undefined;
-        }
+        sidebar?.dispose();
+        sidebar = undefined;
+        const mountedUi = sidebarUi;
+        sidebarUi = undefined;
+        mountedUi?.setWidget('background-tasks', undefined);
         if (handoffError !== undefined)
             throw handoffError;
     };
@@ -264,26 +259,7 @@ export default async function backgroundTasksExtension(pi) {
         try {
             if (!ctx.hasUI)
                 return;
-            const allTasks = registry.allTasks();
-            const running = allTasks.filter((task) => task.status === 'running');
-            const unseenFailed = allTasks.filter((task) => task.status === 'failed' && !seenTaskIds.has(task.id));
-            const unseenStopped = allTasks.filter((task) => task.status === 'killed' && !seenTaskIds.has(task.id));
-            const unseenDone = allTasks.filter((task) => task.status === 'completed' && !seenTaskIds.has(task.id));
-            const unseenFinishedCount = unseenFailed.length + unseenStopped.length + unseenDone.length;
-            ctx.ui.setWidget('background-tasks', undefined);
-            const parts = [];
-            if (unseenFailed.length > 0)
-                parts.push(`${String(unseenFailed.length)} failed`);
-            if (unseenStopped.length > 0)
-                parts.push(`${String(unseenStopped.length)} stopped`);
-            if (unseenDone.length > 0)
-                parts.push(`${String(unseenDone.length)} done`);
-            const entryHint = dockOpen
-                ? 'focused'
-                : `${dockEntryHint}${unseenFinishedCount > 0 ? ' · /bg-clear' : ''}`;
-            const finished = parts.length > 0 ? ` │ finished unread: ${parts.join(' · ')}` : '';
-            const label = ` bg ${String(running.length)} running${finished} · ${entryHint} `;
-            ctx.ui.setStatus('background-tasks', lightBlue(label));
+            sidebar?.refresh();
         }
         catch (error) {
             console.error(`[background-tasks] UI update failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -398,21 +374,19 @@ export default async function backgroundTasksExtension(pi) {
         await registry.ensureRuntimeDir(nextRegistryCtx);
         if (disposed)
             return;
-        updateUi(ctx);
-        if (disposed)
-            return;
-        if (statusInterval !== undefined)
-            clearInterval(statusInterval);
-        if (disposed)
-            return;
-        const nextStatusInterval = setInterval(() => {
-            updateUi();
-        }, STATUS_INTERVAL_MS);
-        if (disposed) {
-            clearInterval(nextStatusInterval);
-            return;
+        if (ctx.mode === 'tui' && ctx.hasUI && !sidebarUi) {
+            ctx.ui.setWidget('background-tasks', (tui, theme) => {
+                sidebar?.dispose();
+                sidebar = new BackgroundTasksSidebar(tui, theme, {
+                    getTasks: () => registry.allTasks(),
+                    isSeen: (id) => seenTaskIds.has(id),
+                    isManagerOpen: () => dockOpen,
+                });
+                return sidebar;
+            });
+            sidebarUi = ctx.ui;
         }
-        statusInterval = nextStatusInterval;
+        updateUi(ctx);
     });
     pi.on('session_shutdown', async (event, ctx) => {
         beginSessionShutdown(event.reason);
@@ -493,7 +467,7 @@ export default async function backgroundTasksExtension(pi) {
         },
     });
     pi.registerCommand('bg-clear', {
-        description: 'Clear finished background task footer notices',
+        description: 'Clear finished background task notices',
         handler: (_args, ctx) => {
             notifyClearFinishedNotices(ctx);
             return Promise.resolve();
@@ -501,7 +475,7 @@ export default async function backgroundTasksExtension(pi) {
     });
     if (config.dockShortcut === 'shift+down') {
         pi.registerShortcut('shift+down', {
-            description: 'Open focused background task footer dock',
+            description: 'Open focused background task manager',
             handler: async (ctx) => {
                 await openTaskManager(ctx);
             },
@@ -509,14 +483,14 @@ export default async function backgroundTasksExtension(pi) {
     }
     if (config.dockShortcut === 'ctrl+alt+b') {
         pi.registerShortcut('ctrl+alt+b', {
-            description: 'Open focused background task footer dock',
+            description: 'Open focused background task manager',
             handler: async (ctx) => {
                 await openTaskManager(ctx);
             },
         });
     }
     pi.registerShortcut('ctrl+alt+c', {
-        description: 'Clear finished background task footer notices (terminal-dependent fallback for /bg-clear)',
+        description: 'Clear finished background task notices (terminal-dependent fallback for /bg-clear)',
         handler: (ctx) => {
             notifyClearFinishedNotices(ctx);
         },
@@ -593,7 +567,7 @@ export default async function backgroundTasksExtension(pi) {
         promptGuidelines: [
             'Use bg_run instead of bash for commands expected to run for a long time, such as test suites, dev servers, watchers, or builds.',
             'Always set isAgent: true only when the background task launches an LLM/agent process; set isAgent: false for scripts, tests, dev servers, sleeps, and ordinary shell commands.',
-            'When using bg_run, always set name to a concise 2-6 word human-readable label for the footer task dock; do not use the raw command as the name unless it is already short and meaningful.',
+            'When using bg_run, always set name to a concise 2-6 word human-readable label for the task sidebar; do not use the raw command as the name unless it is already short and meaningful.',
             'bg_run returns immediately. With notifyOnCompletion:true and triggerOnCompletion:true (both defaults), completed, failed, or killed terminal state is delivered as <background-task-notification> and automatically starts a follow-up agent turn.',
             'After a default bg_run launch, continue only independent useful work that does not merely wait for the task; otherwise briefly acknowledge it if useful, then end the current turn. Do not call sleep, bg_status, or bg_logs merely to wait; the terminal notification will wake you.',
             'Treat <background-task-notification> as durable terminal truth. Do not call bg_status to reconfirm it; call bg_logs only when the task output is needed.',

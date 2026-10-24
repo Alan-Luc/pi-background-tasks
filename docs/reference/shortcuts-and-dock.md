@@ -12,13 +12,15 @@ covers_sources: []
 <!-- pi-docs:begin name="shortcut-contracts" generator="scripts/docs/generate.mjs" -->
 | Shortcut | Availability | Default | Description | Provenance |
 | --- | --- | --- | --- | --- |
-| `ctrl+alt+b` | `dock:ctrl+alt+b` | no | Open focused background task footer dock | `src/extension.ts:664` |
-| `ctrl+alt+c` | `always` | yes | Clear finished background task footer notices (terminal-dependent fallback for /bg-clear) | `src/extension.ts:672` |
-| `shift+down` | `dock:shift+down` | yes | Open focused background task footer dock | `src/extension.ts:655` |
+| `ctrl+alt+b` | `dock:ctrl+alt+b` | no | Open focused background task manager | `src/extension.ts:637` |
+| `ctrl+alt+c` | `always` | yes | Clear finished background task notices (terminal-dependent fallback for /bg-clear) | `src/extension.ts:645` |
+| `shift+down` | `dock:shift+down` | yes | Open focused background task manager | `src/extension.ts:628` |
 <!-- pi-docs:end name="shortcut-contracts" -->
 
 `PI_BG_DOCK_SHORTCUT` selects `shift+down` (default), `ctrl+alt+b`, or `off`. Only the selected dock key is registered; with `off`, `/tasks` and `/bg-tasks` remain the fallback.
 
 `Ctrl+Alt+C` is separate from dock selection and clears finished notices as a terminal-dependent fallback for `/bg-clear`.
 
-The footer always shows how many background jobs are running, including `bg 0 running` when none are active. Finished unread notices (failed, stopped, and done) appear after a separator; they are not running jobs. Opening a task detail marks that task seen; list navigation alone does not clear badges. Clearing notices leaves the running count visible.
+A compact right-side panel shows running jobs and unseen finished notices, without progress output. It stays out of keyboard focus, uses theme colours, and hides while the task manager is open or the terminal is smaller than 100 columns or 20 rows. Use `/tasks` or the selected dock key when hidden. There is no background-task footer badge.
+
+Opening a task detail marks that task seen; list navigation alone does not clear notices. `/bg-clear` removes finished notices from the panel without hiding running jobs.

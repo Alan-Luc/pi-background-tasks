@@ -16,7 +16,7 @@ The personal fork contains only durable background shell tasks. It retains:
 
 - tools `bg_run`, `bg_status`, `bg_logs`, and `bg_kill`;
 - commands `/bg`, `/tasks`, `/bg-tasks`, `/bg-clear`, `/jobs`, `/logs`, and `/kill`;
-- process lifecycle, bounded logs, completion notifications, EventBus delivery, telemetry, the footer dock, `Shift+Down`/selected dock configuration, and `Ctrl+Alt+C`.
+- process lifecycle, bounded logs, completion notifications, EventBus delivery, telemetry, the passive task sidebar, `Shift+Down`/selected dock configuration, and `Ctrl+Alt+C`.
 
 There is no feature-selection environment variable. Dock and shell configuration remain explicit and invalid values fail loudly. The package does not perform automatic npm update checks.
 

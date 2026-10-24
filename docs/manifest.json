@@ -37,13 +37,14 @@
       "state": "missing"
     },
     {
-      "authored_body_sha256": "sha256:0334fedf5395d1a5d8de8f68c775aec5725008f0f8b1bc33651f5060ee507504",
+      "authored_body_sha256": "sha256:2931a4b25bc472141e425c53de142a84f7dbac87c16e086bf1309cc1e9b7803d",
       "covers_sources": [
         "extensions/background-tasks.ts",
         "src/core/config.ts",
         "src/core/lazy-module.ts",
         "src/extension.ts",
-        "src/ui/background-tasks-manager.ts"
+        "src/ui/background-tasks-manager.ts",
+        "src/ui/background-tasks-sidebar.ts"
       ],
       "doc_id": "subsystems/host-ui-and-telemetry",
       "rel": "docs/subsystems/host-ui-and-telemetry.md",
@@ -307,7 +308,8 @@
         "src/core/config.ts",
         "src/core/lazy-module.ts",
         "src/extension.ts",
-        "src/ui/background-tasks-manager.ts"
+        "src/ui/background-tasks-manager.ts",
+        "src/ui/background-tasks-sidebar.ts"
       ],
       "covers_surfaces": [],
       "mode": "authored",
@@ -500,16 +502,16 @@
         "id": "command:bg",
         "kind": "command",
         "name": "bg",
-        "source": "src/extension.ts:603"
+        "source": "src/extension.ts:576"
       },
       {
         "availability": "always",
         "default_available": true,
-        "description": "Clear finished background task footer notices",
+        "description": "Clear finished background task notices",
         "id": "command:bg-clear",
         "kind": "command",
         "name": "bg-clear",
-        "source": "src/extension.ts:646"
+        "source": "src/extension.ts:619"
       },
       {
         "availability": "always",
@@ -518,7 +520,7 @@
         "id": "command:bg-tasks",
         "kind": "command",
         "name": "bg-tasks",
-        "source": "src/extension.ts:638"
+        "source": "src/extension.ts:611"
       },
       {
         "availability": "always",
@@ -527,7 +529,7 @@
         "id": "command:jobs",
         "kind": "command",
         "name": "jobs",
-        "source": "src/extension.ts:680"
+        "source": "src/extension.ts:653"
       },
       {
         "availability": "always",
@@ -536,7 +538,7 @@
         "id": "command:kill",
         "kind": "command",
         "name": "kill",
-        "source": "src/extension.ts:724"
+        "source": "src/extension.ts:697"
       },
       {
         "availability": "always",
@@ -545,7 +547,7 @@
         "id": "command:logs",
         "kind": "command",
         "name": "logs",
-        "source": "src/extension.ts:693"
+        "source": "src/extension.ts:666"
       },
       {
         "availability": "always",
@@ -554,7 +556,7 @@
         "id": "command:tasks",
         "kind": "command",
         "name": "tasks",
-        "source": "src/extension.ts:630"
+        "source": "src/extension.ts:603"
       }
     ],
     "eventbus": [
@@ -586,36 +588,36 @@
         "id": "renderer:background-task-notification",
         "kind": "renderer",
         "name": "background-task-notification",
-        "source": "src/extension.ts:505"
+        "source": "src/extension.ts:477"
       }
     ],
     "shortcut": [
       {
         "availability": "dock:ctrl+alt+b",
         "default_available": false,
-        "description": "Open focused background task footer dock",
+        "description": "Open focused background task manager",
         "id": "shortcut:ctrl+alt+b",
         "kind": "shortcut",
         "name": "ctrl+alt+b",
-        "source": "src/extension.ts:664"
+        "source": "src/extension.ts:637"
       },
       {
         "availability": "always",
         "default_available": true,
-        "description": "Clear finished background task footer notices (terminal-dependent fallback for /bg-clear)",
+        "description": "Clear finished background task notices (terminal-dependent fallback for /bg-clear)",
         "id": "shortcut:ctrl+alt+c",
         "kind": "shortcut",
         "name": "ctrl+alt+c",
-        "source": "src/extension.ts:672"
+        "source": "src/extension.ts:645"
       },
       {
         "availability": "dock:shift+down",
         "default_available": true,
-        "description": "Open focused background task footer dock",
+        "description": "Open focused background task manager",
         "id": "shortcut:shift+down",
         "kind": "shortcut",
         "name": "shift+down",
-        "source": "src/extension.ts:655"
+        "source": "src/extension.ts:628"
       }
     ],
     "tool": [
@@ -643,7 +645,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:941"
+        "source": "src/extension.ts:914"
       },
       {
         "availability": "always",
@@ -679,7 +681,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:896"
+        "source": "src/extension.ts:869"
       },
       {
         "availability": "always",
@@ -692,7 +694,7 @@
         "promptGuidelines": [
           "Use bg_run instead of bash for commands expected to run for a long time, such as test suites, dev servers, watchers, or builds.",
           "Always set isAgent: true only when the background task launches an LLM/agent process; set isAgent: false for scripts, tests, dev servers, sleeps, and ordinary shell commands.",
-          "When using bg_run, always set name to a concise 2-6 word human-readable label for the footer task dock; do not use the raw command as the name unless it is already short and meaningful.",
+          "When using bg_run, always set name to a concise 2-6 word human-readable label for the task sidebar; do not use the raw command as the name unless it is already short and meaningful.",
           "bg_run returns immediately. With notifyOnCompletion:true and triggerOnCompletion:true (both defaults), completed, failed, or killed terminal state is delivered as <background-task-notification> and automatically starts a follow-up agent turn.",
           "After a default bg_run launch, continue only independent useful work that does not merely wait for the task; otherwise briefly acknowledge it if useful, then end the current turn. Do not call sleep, bg_status, or bg_logs merely to wait; the terminal notification will wake you.",
           "Treat <background-task-notification> as durable terminal truth. Do not call bg_status to reconfirm it; call bg_logs only when the task output is needed.",
@@ -715,7 +717,7 @@
               "type": "boolean"
             },
             "name": {
-              "description": "Short human-readable task name shown in the bg footer dock. Required; use 2-6 words, not the raw command.",
+              "description": "Short human-readable task name shown in the background task sidebar. Required; use 2-6 words, not the raw command.",
               "type": "string"
             },
             "notifyOnCompletion": {
@@ -742,7 +744,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:757"
+        "source": "src/extension.ts:730"
       },
       {
         "availability": "always",
@@ -768,7 +770,7 @@
           "required": [],
           "type": "object"
         },
-        "source": "src/extension.ts:865"
+        "source": "src/extension.ts:838"
       }
     ]
   },
@@ -814,6 +816,9 @@
       "subsystems/host-ui-and-telemetry"
     ],
     "src/ui/background-tasks-manager.ts": [
+      "subsystems/host-ui-and-telemetry"
+    ],
+    "src/ui/background-tasks-sidebar.ts": [
       "subsystems/host-ui-and-telemetry"
     ]
   },

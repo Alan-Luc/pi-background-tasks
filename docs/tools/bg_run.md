@@ -11,7 +11,7 @@ covers_sources: []
 
 <!-- pi-docs:begin name="tool-contract-bg_run" generator="scripts/docs/generate.mjs" -->
 - Label: **Background Run**
-- Source: `src/extension.ts:757`
+- Source: `src/extension.ts:730`
 - Availability: `always`
 - Available by default: **yes**
 - Description: Start a named long-running shell command in the background and return immediately with a task ID and output path. By default, completed, failed, or killed terminal state is delivered automatically as <background-task-notification> and starts a follow-up agent turn; do not sleep or poll merely to wait. Output is stored outside the project tree in a private temporary directory; model-visible logs are bounded to 50.0KB.
@@ -22,7 +22,7 @@ covers_sources: []
 | `command` | yes | `string` | Shell command to start in the background |  |
 | `description` | no | `string` | Optional longer human-readable context for the task |  |
 | `isAgent` | yes | `boolean` | Required. Set true only when this background task launches an LLM/agent process, such as a child `pi -p ...` or `pi --mode json ...`, so Pi-agent telemetry can be collected. Set false for scripts, tests, servers, sleeps, and ordinary shell commands. |  |
-| `name` | yes | `string` | Short human-readable task name shown in the bg footer dock. Required; use 2-6 words, not the raw command. |  |
+| `name` | yes | `string` | Short human-readable task name shown in the background task sidebar. Required; use 2-6 words, not the raw command. |  |
 | `notifyOnCompletion` | no | `boolean` | Whether to deliver the durable terminal notification. Default: true; disable only when deliberately taking over completion monitoring. |  |
 | `surviveReload` | no | `boolean` | Opt in to retaining this exact ordinary isAgent:false shell execution across a real same-process Pi reload. Default: false. Supported only for ordinary shell tasks. |  |
 | `timeoutSeconds` | no | `number` | Optional timeout; task is failed and killed when exceeded |  |
@@ -48,7 +48,7 @@ covers_sources: []
       "type": "boolean"
     },
     "name": {
-      "description": "Short human-readable task name shown in the bg footer dock. Required; use 2-6 words, not the raw command.",
+      "description": "Short human-readable task name shown in the background task sidebar. Required; use 2-6 words, not the raw command.",
       "type": "string"
     },
     "notifyOnCompletion": {

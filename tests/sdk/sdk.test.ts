@@ -1265,123 +1265,75 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
     },
   );
 
-  void it('keeps finished footer notices until explicit /bg-clear', async () => {
+  void it('mounts one passive sidebar only in TUI mode and removes it on shutdown', async () => {
     const { session } = await harness();
+    const widgets: boolean[] = [];
     const statuses: Array<string | undefined> = [];
-    const notifications: UiNotification[] = [];
-    session.extensionRunner.setUIContext(
-      makeStatusUi(session.extensionRunner.getUIContext(), statuses, notifications),
-    );
+    const ui: ExtensionUIContext = {
+      ...makeStatusUi(session.extensionRunner.getUIContext(), statuses, []),
+      setWidget: (key, content) => {
+        assert.equal(key, 'background-tasks');
+        widgets.push(typeof content === 'function');
+      },
+    };
     try {
-      const done = await exec(session, 'bg_run', {
+      session.extensionRunner.setUIContext(ui, 'rpc');
+      await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
+      assert.deepEqual(widgets, [], 'RPC must not install a terminal sidebar');
+      session.extensionRunner.setUIContext(ui, 'tui');
+      await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
+      assert.deepEqual(widgets, [true], 'TUI installs a component factory');
+      await session.extensionRunner.emit({ type: 'session_start', reason: 'startup' });
+      assert.deepEqual(widgets, [true], 'repeated startup does not duplicate sidebar');
+      const started = await exec(session, 'bg_run', {
         isAgent: false,
-        name: 'Footer Done',
-        command: 'echo done',
+        name: 'Sidebar Silent',
+        command: `node -e ${JSON.stringify('setTimeout(() => {}, 1000)')}`,
         notifyOnCompletion: false,
         triggerOnCompletion: false,
       });
-      await wait(session, taskFromResult(done).id);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.match(statuses.at(-1) ?? '', /bg 0 running │ finished unread: 1 done · Shift↓ · \/bg-clear/);
-
-      const shortcuts = session.extensionRunner.getShortcuts({});
-      assert.ok(shortcuts.has('ctrl+alt+c'));
-      const clearCommand = session.extensionRunner
-        .getRegisteredCommands()
-        .find((cmd) => cmd.invocationName === 'bg-clear');
-      assert.ok(clearCommand);
-      await clearCommand.handler('', session.extensionRunner.createCommandContext());
-      assert.match(statuses.at(-1) ?? '', /bg 0 running · Shift↓/);
-      assert.match(notifications.at(-1)?.message ?? '', /Cleared 1 finished/);
-
-      const running = await exec(session, 'bg_run', {
-        isAgent: false,
-        name: 'Footer Running',
-        command: `node -e ${JSON.stringify('setTimeout(() => {}, 10000)')}`,
-        notifyOnCompletion: false,
-        triggerOnCompletion: false,
-      });
-      const secondDone = await exec(session, 'bg_run', {
-        isAgent: false,
-        name: 'Footer Done Two',
-        command: 'echo two',
-        notifyOnCompletion: false,
-        triggerOnCompletion: false,
-      });
-      await wait(session, taskFromResult(secondDone).id);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.match(statuses.at(-1) ?? '', /bg 1 running │ finished unread: 1 done · Shift↓ · \/bg-clear/);
-      await clearCommand.handler('', session.extensionRunner.createCommandContext());
-      assert.match(statuses.at(-1) ?? '', /bg 1 running · Shift↓/);
-      assert.doesNotMatch(statuses.at(-1) ?? '', /done|\/bg-clear/);
-      await exec(session, 'bg_kill', { taskId: taskFromResult(running).id });
+      await wait(session, taskFromResult(started).id);
+      assert.deepEqual(statuses, [], 'sidebar replaces background-task footer status');
+      assert.deepEqual(widgets, [true], 'registry refresh must retain the mounted widget');
     } finally {
       await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
       session.dispose();
     }
+    assert.deepEqual(widgets, [true, false], 'shutdown removes the owned widget');
   });
 
-  void it('reports failed/stopped/done footer combinations and focused dock status', async () => {
+  void it('clears finished sidebar notices without stopping running jobs', async () => {
     const { session } = await harness();
-    const statuses: Array<string | undefined> = [];
     const notifications: UiNotification[] = [];
     session.extensionRunner.setUIContext(
-      makeStatusUi(session.extensionRunner.getUIContext(), statuses, notifications),
+      makeStatusUi(session.extensionRunner.getUIContext(), [], notifications),
     );
     try {
-      const failed = await exec(session, 'bg_run', {
+      const running = await exec(session, 'bg_run', {
         isAgent: false,
-        name: 'Footer Failed',
-        command: 'node -e "process.exit(2)"',
-        notifyOnCompletion: false,
-        triggerOnCompletion: false,
-      });
-      await wait(session, taskFromResult(failed).id);
-      const stopped = await exec(session, 'bg_run', {
-        isAgent: false,
-        name: 'Footer Stopped',
+        name: 'Sidebar Running',
         command: `node -e ${JSON.stringify('setTimeout(() => {}, 10000)')}`,
         notifyOnCompletion: false,
         triggerOnCompletion: false,
       });
-      const stoppedTask = taskFromResult(stopped);
-      await exec(session, 'bg_kill', { taskId: stoppedTask.id });
-      await wait(session, stoppedTask.id);
       const done = await exec(session, 'bg_run', {
         isAgent: false,
-        name: 'Footer Done Matrix',
+        name: 'Sidebar Done',
         command: 'echo done',
         notifyOnCompletion: false,
         triggerOnCompletion: false,
       });
       await wait(session, taskFromResult(done).id);
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.match(statuses.at(-1) ?? '', /bg 0 running │ finished unread: 1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/);
-
-      const running = await exec(session, 'bg_run', {
-        isAgent: false,
-        name: 'Footer Focused',
-        command: `node -e ${JSON.stringify('setTimeout(() => {}, 10000)')}`,
-        notifyOnCompletion: false,
-        triggerOnCompletion: false,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.match(
-        statuses.at(-1) ?? '',
-        /bg 1 running │ finished unread: 1 failed · 1 stopped · 1 done · Shift↓ · \/bg-clear/,
-      );
-      const shortcuts = session.extensionRunner.getShortcuts({});
-      const shiftDown = shortcuts.get('shift+down');
-      assert.ok(shiftDown, 'Shift+Down shortcut should be registered');
-      await shiftDown.handler(session.extensionRunner.createContext());
-      assert.ok(
-        statuses.some(
-          (status) =>
-            status?.includes('bg 1 running │ finished unread: 1 failed · 1 stopped · 1 done · focused') ?? false,
-        ),
-      );
+      const clear = session.extensionRunner.getRegisteredCommands()
+        .find((cmd) => cmd.invocationName === 'bg-clear');
+      assert.ok(clear);
+      await clear.handler('', session.extensionRunner.createCommandContext());
+      assert.match(notifications.at(-1)?.message ?? '', /Cleared 1 finished/);
+      await clear.handler('', session.extensionRunner.createCommandContext());
+      assert.match(notifications.at(-1)?.message ?? '', /No finished background task notices/);
+      const status = await exec(session, 'bg_status', { taskId: taskFromResult(running).id });
+      assert.match(resultText(status), /running/);
       await exec(session, 'bg_kill', { taskId: taskFromResult(running).id });
-      assert.equal(notifications.length, 0);
     } finally {
       await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
       session.dispose();

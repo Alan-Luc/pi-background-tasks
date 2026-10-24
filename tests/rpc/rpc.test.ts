@@ -319,14 +319,13 @@ void describe('rpc', () => {
     await withRpc(async (rpc) => {
       const tasksResponse = await rpc.prompt('/tasks');
       assert.equal(field(tasksResponse, 'success'), true);
-      await rpc.wait(
-        (event) =>
-          field(event, 'type') === 'extension_ui_request' &&
-          field(event, 'method') === 'setStatus' &&
-          field(event, 'statusKey') === 'background-tasks',
-      );
       const bgTasksResponse = await rpc.prompt('/bg-tasks bdeadbeef');
       assert.equal(field(bgTasksResponse, 'success'), true);
+      assert.ok(!rpc.events.some((event) =>
+        field(event, 'type') === 'extension_ui_request' &&
+        field(event, 'method') === 'setStatus' &&
+        field(event, 'statusKey') === 'background-tasks',
+      ), 'RPC does not receive the removed background-task footer status');
     });
   });
 

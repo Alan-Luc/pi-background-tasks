@@ -21,7 +21,7 @@ There is no feature-selection parser or advanced workflow inventory in this fork
 - Public surfaces extracted: 16
 - Public surfaces available by default: 15
 - Finite dock shortcut values: `shift+down`, `ctrl+alt+b`, `off`
-- Governed production sources: 14
+- Governed production sources: 15
 - Tool contracts extracted: 4
 - Schema IDs extracted: 5
 - Environment variable references extracted: 14

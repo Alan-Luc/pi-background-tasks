@@ -17,7 +17,7 @@ This personal fork keeps the process runtime only:
 - inspect bounded status and logs;
 - stop tasks and clean up process trees safely;
 - receive durable completion notifications through Pi's EventBus;
-- use the footer dock, task manager commands, selected dock shortcut, and clear-notice shortcut.
+- see a compact right-side job/status panel, with task manager commands and shortcuts.
 
 This is a personal fork of [Ismail's pi-background-tasks](https://github.com/ismailsaleekh/pi-background-tasks). The upstream author and ISC license are preserved. The package is private and is not published to npm; incorporate upstream fixes manually through the `upstream` Git remote.
 
@@ -36,6 +36,8 @@ pi install . -l
 - `/kill <task-id>` stops a task.
 - `/tasks` and `/bg-tasks` open the task manager.
 - `/bg-clear` clears finished-task notices.
+
+The right-side panel shows running jobs and unseen finished notices without a progress feed. It stays out of keyboard focus and hides below 100 columns or 20 rows; use `/tasks` in smaller terminals. There is no background-task footer badge.
 
 The default dock shortcut is **Shift↓**. `PI_BG_DOCK_SHORTCUT=ctrl+alt+b` selects the alternate shortcut, and `PI_BG_DOCK_SHORTCUT=off` disables the shortcut while retaining the commands. Shell selection and output limits are documented in [Configuration](docs/operations/configuration.md).
 

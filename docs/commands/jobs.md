@@ -12,7 +12,7 @@ covers_sources: []
 <!-- pi-docs:begin name="command-contract-jobs" generator="scripts/docs/generate.mjs" -->
 | Command | Availability | Default | Description | Provenance |
 | --- | --- | --- | --- | --- |
-| `/jobs` | `always` | yes | List running and recent background tasks | `src/extension.ts:680` |
+| `/jobs` | `always` | yes | List running and recent background tasks | `src/extension.ts:653` |
 <!-- pi-docs:end name="command-contract-jobs" -->
 
 List retained background tasks and their current states. Use an exact id or unambiguous prefix with `/logs` and `/kill`.
