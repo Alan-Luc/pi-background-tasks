@@ -176,6 +176,27 @@ function assertWidth(lines: string[], width: number) {
 }
 
 void describe('BackgroundTasksManager component', () => {
+  void it('uses theme foregrounds without bright background fills and keeps selection visible', () => {
+    const h = manager({}, [
+      task({ id: 'bfirst001', name: 'First Task', startTime: 2 }),
+      task({ id: 'bsecond01', name: 'Second Task', startTime: 1 }),
+    ]);
+    try {
+      const lines = h.instance.render(100);
+      assert.doesNotMatch(lines.join('\n'), /\x1b\[48;/);
+      assert.ok(lines[0]?.includes(theme.fg('borderMuted', `╭${'─'.repeat(98)}╮`)));
+      assert.match(stripAnsi(lines.join('\n')), /›\s+First Task/);
+      assert.ok(lines.some((line) => line.includes(theme.fg('accent', '›'))));
+      h.instance.handleInput('\x1b[B');
+      const moved = h.instance.render(100);
+      assert.match(stripAnsi(moved.join('\n')), /›\s+Second Task/);
+      assert.doesNotMatch(moved.join('\n'), /\x1b\[48;/);
+      assertWidth(moved, 100);
+    } finally {
+      h.instance.dispose();
+    }
+  });
+
   void it('separates running jobs from finished notices as the last job exits', () => {
     const running = task({ id: 'brunning1' });
     const finished = task({ id: 'bfinished', status: 'completed', exitCode: 0 });
