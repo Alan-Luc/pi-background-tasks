@@ -54,6 +54,26 @@ void describe('BackgroundTasksSidebar', () => {
     assert.equal(clock.mock.callCount(), 1, 'one consistent clock reading per frame');
   });
 
+  void it('numbers chronological running rows in dim without changing job IDs', (t) => {
+    t.mock.method(Date, 'now', () => 60_000);
+    const newer = task('real-new-id', 'running', 'Newer');
+    const oldest = task('real-old-id', 'running', 'Oldest');
+    newer.startTime = 59_000;
+    oldest.startTime = 1000;
+    const calls: Array<{ color: string; text: string }> = [];
+    t.mock.method(theme, 'fg', (color: Parameters<Theme['fg']>[0], text: string) => { calls.push({ color, text }); return text; });
+    const tasks = [newer, task('finished', 'completed'), oldest];
+    const view = setup(tasks);
+    const lines = view.sidebar.render(120);
+    assert.match(lines[1] ?? '', /✳ #1 Oldest \(59s\)  $/);
+    assert.match(lines[2] ?? '', /✳ #2 Newer \(1s\)  $/);
+    assert.ok(calls.some((call) => call.color === 'dim' && call.text === '#1 '));
+    assert.deepEqual(tasks.map((job) => job.id), ['real-new-id', 'finished', 'real-old-id']);
+    oldest.status = 'completed';
+    assert.match(view.sidebar.render(120)[1] ?? '', /✳ #1 Newer \(1s\)  $/);
+    view.sidebar.dispose();
+  });
+
   void it('composes Tasks and Jobs with level headings and width-aware narrow fallback', (t) => {
     t.mock.method(Date, 'now', () => 60_000);
     const running = task('run', 'running', 'Job one');
@@ -118,7 +138,7 @@ void describe('BackgroundTasksSidebar', () => {
     const view = setup([task('run', 'running', 'Native job')]);
     const lines = view.sidebar.render(120);
     assert.equal(lines[0]?.trimStart(), '● Background jobs (1)');
-    assert.match(lines[1] ?? '', /✳ Native job \(0ms\)  $/);
+    assert.match(lines[1] ?? '', /✳ #1 Native job \(0ms\)  $/);
     assert.equal(visibleWidth(lines[0] ?? ''), 120);
     assert.equal(visibleWidth((lines[1] ?? '').trimEnd()), 118);
     assert.ok(lines.every((line) => visibleWidth(line) <= 120));
@@ -155,7 +175,7 @@ void describe('BackgroundTasksSidebar', () => {
       assert.ok(lines.length > 0);
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
     }
-    assert.match(view.sidebar.render(36)[1] ?? '', /✳ 界/);
+    assert.match(view.sidebar.render(36)[1] ?? '', /✳ #1 界/);
     assert.match(view.sidebar.render(36)[1] ?? '', /\)  $/);
   });
 

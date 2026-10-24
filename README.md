@@ -37,7 +37,7 @@ pi install . -l
 - `/tasks` and `/bg-tasks` open the task manager.
 - `/bg-clear` clears finished-task notices.
 
-Running jobs appear above the editor, oldest-first, with animated activity icons and elapsed runtimes. A compatible pi-tasks extension shares the same native row: Tasks left, Jobs right, with level headings and mirrored outer margins. Narrow terminals stack the blocks; when no jobs remain, Tasks keeps the full width. Other widgets remain independent. There is no progress feed, floating overlay, or background-task footer badge.
+Running jobs appear above the editor, oldest-first, with dim display numbers (`#1`, `#2`, …), animated activity icons and elapsed runtimes. Display numbers are row positions, not job IDs. A compatible pi-tasks extension shares the same native row: Tasks left, Jobs right, with level headings and mirrored outer margins. Narrow terminals stack the blocks; when no jobs remain, Tasks keeps the full width. Other widgets remain independent. There is no progress feed, floating overlay, or background-task footer badge.
 
 Shared layout requires the patched pi-tasks source checkout; npm `@tintinweb/pi-tasks@0.9.0` alone does not include the presentation bridge. Without it, Jobs still works as a standalone right-aligned widget.
 

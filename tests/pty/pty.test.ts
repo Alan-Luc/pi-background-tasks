@@ -295,6 +295,9 @@ void describe('interactive PTY', () => {
       assert.ok(jobPositions.every((position) => position >= 0));
       assert.deepEqual([...jobPositions].sort((a, b) => a - b), jobPositions, 'Jobs remain oldest-first');
 
+      for (let index = 0; index < 4; index++) {
+        assert.match(wideLines[taskHeading + index + 1] ?? '', new RegExp(`[✳✴✵✶✷✸✹✺✻✼✽] #${index + 1} (?:Job|This)`, 'u'));
+      }
       const firstDuration = nativeLongJobDuration(wideScreen);
       assert.ok(firstDuration, 'truncated long-name rows must retain a visible elapsed suffix');
       await new Promise((resolveWait) => setTimeout(resolveWait, 1300));

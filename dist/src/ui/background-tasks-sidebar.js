@@ -35,7 +35,8 @@ export class BackgroundTasksSidebar {
         const now = Date.now();
         const panel = {
             title: `● Background jobs (${running.length})`,
-            rows: running.slice(0, 5).map((task) => ({
+            rows: running.slice(0, 5).map((task, index) => ({
+                numberLabel: `#${index + 1} `,
                 name: taskDisplayName(task)
                     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
                     .replace(/\s+/g, ' ')
@@ -44,7 +45,7 @@ export class BackgroundTasksSidebar {
             })),
             hiddenCount: Math.max(0, running.length - 5),
         };
-        const jobWidth = Math.min(width, JOBS_MAX_WIDTH, Math.max(visibleWidth(panel.title), ...panel.rows.map((row) => visibleWidth(row.name) + visibleWidth(row.duration) + 5)));
+        const jobWidth = Math.min(width, JOBS_MAX_WIDTH, Math.max(visibleWidth(panel.title), ...panel.rows.map((row) => visibleWidth(row.numberLabel + row.name) + visibleWidth(row.duration) + 5)));
         if (!this.tasksWidget)
             return this.renderJobs(panel, width, jobWidth);
         const tasksWidth = width - jobWidth - COLUMN_GAP;
@@ -69,7 +70,8 @@ export class BackgroundTasksSidebar {
             const durationWidth = visibleWidth(row.duration);
             const content = rowWidth <= durationWidth + 3
                 ? this.theme.fg('dim', truncateToWidth(row.duration, rowWidth))
-                : this.theme.fg('accent', `${spinner} ${truncateToWidth(row.name, rowWidth - durationWidth - 3)}`) +
+                : this.theme.fg('accent', `${spinner} `) +
+                    truncateToWidth(this.theme.fg('dim', row.numberLabel) + this.theme.fg('accent', row.name), rowWidth - durationWidth - 3) +
                     this.theme.fg('dim', ` ${row.duration}`);
             lines.push(rightAligned(content, width, 2));
         }
