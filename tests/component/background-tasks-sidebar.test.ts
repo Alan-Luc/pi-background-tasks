@@ -1,121 +1,104 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Theme } from '@earendil-works/pi-coding-agent';
-import { visibleWidth, type Component, type OverlayOptions } from '@earendil-works/pi-tui';
+import type { Theme } from '@earendil-works/pi-coding-agent';
+import { visibleWidth } from '@earendil-works/pi-tui';
 import type { BgTaskSnapshot } from '../../src/core/common.js';
 import { BackgroundTasksSidebar } from '../../src/ui/background-tasks-sidebar.js';
 
 const theme: Pick<Theme, 'fg'> = { fg: (_color, text) => text };
+
 function task(id: string, status: BgTaskSnapshot['status'], name = id): BgTaskSnapshot {
-  return { id, status, name, command: 'SECRET_COMMAND', outputPath: '/secret/output', cwd: '/secret/cwd', startTime: 0, bytesWritten: 42, isAgent: true, surviveReload: false, notified: false, notifyOnCompletion: true, triggerOnCompletion: true, contextUsage: { tokens: 123, contextWindow: 1000, percent: 12 }, tokenUsage: { input: 456, output: 789, cacheRead: 0, cacheWrite: 0, totalTokens: 1245 }, toolUsage: { total: 3, failed: 0, byName: {} }, model: 'SECRET_MODEL' };
+  return {
+    id, status, name, command: 'SECRET_COMMAND', outputPath: '/secret/output',
+    cwd: '/secret/cwd', startTime: 0, bytesWritten: 42, isAgent: false,
+    surviveReload: false, notified: false, notifyOnCompletion: true,
+    triggerOnCompletion: false, model: 'SECRET_MODEL',
+  };
 }
-function setup(tasks: BgTaskSnapshot[], seen: ReadonlySet<string> = new Set(), isManagerOpen = false) {
-  let panel: Component | undefined;
-  let overlayOptions: OverlayOptions | undefined;
-  let hidden = 0;
+
+function setup(tasks: BgTaskSnapshot[]) {
   let renders = 0;
-  const sidebar = new BackgroundTasksSidebar({
-    showOverlay: (component, options) => { panel = component; overlayOptions = options; return { hide: () => { hidden++; }, setHidden() {}, isHidden: () => false, focus() {}, unfocus() {}, isFocused: () => false }; },
+  let overlays = 0;
+  let managerOpen = false;
+  const tui = {
+    showOverlay: () => { overlays++; throw new Error('Native widget must not create an overlay'); },
     requestRender: () => { renders++; },
-  }, theme, { getTasks: () => tasks, isSeen: (id) => seen.has(id), isManagerOpen: () => isManagerOpen });
-  return { sidebar, panel: () => panel, options: () => overlayOptions, hidden: () => hidden, renders: () => renders };
+  };
+  const sidebar = new BackgroundTasksSidebar(tui, theme, {
+    getTasks: () => tasks,
+    isManagerOpen: () => managerOpen,
+  });
+  return {
+    sidebar, renders: () => renders, overlays: () => overlays,
+    setManagerOpen: (open: boolean) => { managerOpen = open; },
+  };
 }
 
-describe('BackgroundTasksSidebar', () => {
-  it('renders explicit idle state and running rows before unseen finished rows', () => {
-    const idle = setup([]);
-    assert.deepEqual(idle.panel()?.render(36), ['Background jobs', '0 running', 'No jobs running', '/tasks']);
-
-    const view = setup([
-      task('finished-first', 'completed', 'Finished row'),
-      task('run', 'running', 'Running row'),
-      task('failed', 'failed', 'Failed row'),
-      task('stopped', 'killed', 'Stopped row'),
-    ]);
-    const lines = view.panel()?.render(36) ?? [];
-    const runningIndex = lines.findIndex((line) => line.includes('Running row'));
-    const doneIndex = lines.findIndex((line) => line.includes('Finished row'));
-    const failedIndex = lines.findIndex((line) => line.includes('Failed row'));
-    const stoppedIndex = lines.findIndex((line) => line.includes('Stopped row'));
-    assert.match(lines[1] ?? '', /^1 running$/);
-    assert.ok(runningIndex >= 0 && runningIndex < doneIndex && doneIndex < failedIndex && failedIndex < stoppedIndex);
-    assert.match(lines[runningIndex] ?? '', /running$/);
-    assert.match(lines[doneIndex] ?? '', /done$/);
-    assert.match(lines[failedIndex] ?? '', /failed$/);
-    assert.match(lines[stoppedIndex] ?? '', /stopped$/);
+void describe('BackgroundTasksSidebar', () => {
+  void it('renders a native right-aligned widget with compact tree rows above the editor', () => {
+    const view = setup([task('run', 'running', 'Native job')]);
+    const lines = view.sidebar.render(120);
+    assert.match(lines.join('\n'), /● Background jobs · 1 running/);
+    assert.match(lines.join('\n'), /└─ Native job · running/);
+    assert.ok(lines.every((line) => line.startsWith(' '.repeat(84))));
+    assert.ok(lines.every((line) => visibleWidth(line) <= 120));
+    assert.equal(view.overlays(), 0);
   });
 
-  it('omits seen finished tasks but never omits running tasks marked seen', () => {
-    const view = setup([task('active', 'running', 'Active seen'), task('complete', 'completed', 'Finished seen')], new Set(['active', 'complete']));
-    const lines = view.panel()?.render(36) ?? [];
-    assert.ok(lines.some((line) => line.includes('Active seen')));
-    assert.ok(!lines.some((line) => line.includes('Finished seen')));
+  void it('shows only running jobs and disappears when the last job finishes', () => {
+    const running = task('active', 'running', 'Active job');
+    const tasks = [task('done', 'completed', 'Finished job'), running];
+    const view = setup(tasks);
+    let text = view.sidebar.render(36).join('\n');
+    assert.match(text, /Active job/);
+    assert.doesNotMatch(text, /Finished job/);
+    running.status = 'completed';
+    assert.deepEqual(view.sidebar.render(120), []);
+    tasks.push(task('failed', 'failed'), task('stopped', 'killed'));
+    assert.deepEqual(view.sidebar.render(120), [], 'unseen finished notices never keep widget visible');
+    assert.deepEqual(setup([]).sidebar.render(120), []);
   });
 
-  it('limits rows to five and reports truthful overflow and running count', () => {
-    const view = setup([
-      task('r1', 'running', 'Run one'), task('r2', 'running', 'Run two'),
-      task('f1', 'completed', 'Done one'), task('f2', 'failed', 'Fail two'),
-      task('f3', 'killed', 'Stop three'), task('f4', 'completed', 'Done four'),
-    ]);
-    const lines = view.panel()?.render(36) ?? [];
-    assert.equal(['Run one', 'Run two', 'Done one', 'Fail two', 'Stop three'].filter((name) => lines.some((line) => line.includes(name))).length, 5);
-    assert.match(lines[1] ?? '', /^2 running$/);
-    assert.match(lines.at(-1) ?? '', /^\+1 more · \/tasks$/);
-    assert.ok(!lines.some((line) => line.includes('Done four')));
+  void it('limits active rows to five and reports the total and overflow', () => {
+    const view = setup(Array.from({ length: 7 }, (_, i) => task(`Run ${i + 1}`, 'running')));
+    const lines = view.sidebar.render(36);
+    assert.match(lines[0] ?? '', /7 running/);
+    assert.equal(lines.filter((line) => /Run [1-5]/.test(line)).length, 5);
+    assert.doesNotMatch(lines.join('\n'), /Run [67]/);
+    assert.match(lines.at(-1) ?? '', /\+2 more · \/tasks/);
   });
 
-  it('bounds long and wide names, preserves status, and excludes task details and telemetry', () => {
-    const view = setup([
-      task('long', 'running', 'A'.repeat(100)),
-      task('wide', 'failed', '界'.repeat(100)),
-    ]);
-    const lines = view.panel()?.render(36) ?? [];
-    const longRow = lines.find((line) => line.startsWith('AAA')) ?? '';
-    const wideRow = lines.find((line) => line.endsWith('failed')) ?? '';
-    assert.ok(lines.every((line) => visibleWidth(line) <= 36));
-    assert.ok([...wideRow].filter((character) => character === '界').length * 2 + 7 <= 36);
-    assert.match(longRow, /running$/);
-    assert.match(wideRow, /failed$/);
-    const output = lines.join('\n');
-    for (const privateValue of ['SECRET_COMMAND', 'SECRET_MODEL', '/secret/output', '/secret/cwd', '123', '456', '789', '42']) {
-      assert.ok(!output.includes(privateValue));
+  void it('uses available native width, including terminals narrower than 100 columns', () => {
+    const view = setup([task('wide', 'running', '界'.repeat(100))]);
+    for (const width of [1, 20, 36, 80, 120]) {
+      const lines = view.sidebar.render(width);
+      assert.ok(lines.length > 0);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      assert.ok(lines.every((line) => line.startsWith(' '.repeat(Math.max(0, width - 36)))));
     }
+    assert.match(view.sidebar.render(36)[1] ?? '', /running$/);
   });
 
-  it('sanitizes malicious control and ANSI names before rendering', () => {
-    const view = setup([task('hostile', 'running', 'safe\u001b[31mRED\u0007\u009b2J')]);
-    const lines = view.panel()?.render(36) ?? [];
-    assert.ok(lines.some((line) => line.includes('safe') && line.includes('RED')));
-    assert.ok(!lines.join('').includes('\u001b'));
-    assert.ok(!lines.join('').includes('\u0007'));
-    assert.ok(!lines.join('').includes('\u009b'));
+  void it('sanitizes malicious names and excludes output and telemetry', () => {
+    const view = setup([task('malicious', 'running', 'safe\u001b[31mRED\u0007\u009b2J')]);
+    const text = view.sidebar.render(36).join('\n');
+    assert.match(text, /safe.*RED/);
+    assert.doesNotMatch(text, /[\u001b\u0007\u009b]/);
+    assert.doesNotMatch(text, /SECRET_COMMAND|SECRET_MODEL|\/secret\/|42/);
   });
 
-  it('mounts as a passive top-right overlay with responsive visibility thresholds', () => {
-    const view = setup([]);
-    const options = view.options();
-    assert.equal(options?.width, 36);
-    assert.equal(options?.anchor, 'top-right');
-    assert.equal(options?.nonCapturing, true);
-    assert.deepEqual(options?.margin, { top: 1, right: 1 });
-    assert.deepEqual(view.sidebar.render(36), []);
-    assert.equal(options?.visible?.(100, 20), true);
-    assert.equal(options?.visible?.(99, 20), false);
-    assert.equal(options?.visible?.(100, 19), false);
-    // Manager state is supplied by the owner and controls overlay visibility.
-    const managerView = setup([], new Set(), true);
-    assert.equal(managerView.options()?.visible?.(120, 40), false);
-  });
-
-  it('refreshes until disposal, then hides its owned overlay exactly once', () => {
-    const view = setup([]);
+  void it('hides while the manager is open and stops rendering or refreshing after disposal', () => {
+    const view = setup([task('run', 'running')]);
+    view.setManagerOpen(true);
+    assert.deepEqual(view.sidebar.render(120), []);
+    view.setManagerOpen(false);
+    assert.ok(view.sidebar.render(120).length > 0);
     view.sidebar.refresh();
     assert.equal(view.renders(), 1);
     view.sidebar.dispose();
     view.sidebar.dispose();
     view.sidebar.refresh();
-    assert.equal(view.hidden(), 1);
     assert.equal(view.renders(), 1);
+    assert.deepEqual(view.sidebar.render(120), []);
   });
 });

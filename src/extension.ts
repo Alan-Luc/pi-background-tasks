@@ -514,11 +514,10 @@ export default async function backgroundTasksExtension(pi: ExtensionAPI): Promis
         sidebar?.dispose();
         sidebar = new BackgroundTasksSidebar(tui, theme, {
           getTasks: () => registry.allTasks(),
-          isSeen: (id) => seenTaskIds.has(id),
           isManagerOpen: () => dockOpen,
         });
         return sidebar;
-      });
+      }, { placement: 'aboveEditor' });
       sidebarUi = ctx.ui;
     }
     updateUi(ctx);

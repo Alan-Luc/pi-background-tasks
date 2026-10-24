@@ -137,69 +137,79 @@ exit 0
 }
 
 void describe('interactive PTY', () => {
-  void it('shows the passive sidebar through idle, running, finish, and clear while commands remain usable', { timeout: 45_000 }, async (t) => {
+  void it('hides the native job widget when no jobs are running', { timeout: 45_000 }, async (t) => {
     if (!(await ptyInputSupported())) {
       t.skip(PTY_SKIP_REASON);
       return;
     }
-    const output = await runExpect(
-      `
-send {/bg --name "PTY Visibility" sleep 8}
+    const output = await runExpect(`
+send "/bg-clear"
 send "\\r"
 expect {
-  -re "1 running(.|\\n)*PTY Visibility(.|\\n)*running" {}
-  timeout { puts "RUNNING_SIDEBAR_TIMEOUT"; exit 42 }
+  -re "No finished background task notices" {}
+  timeout { puts "IDLE_WIDGET_COMMAND_TIMEOUT"; exit 40 }
+}
+`, 30, { rows: 40, cols: 120 }, { rawOutput: true });
+    assert.doesNotMatch(stripAnsi(output), /Background jobs|No jobs running|0 running/);
+  });
+
+  void it('shows native running jobs while commands remain usable, then completes', { timeout: 45_000 }, async (t) => {
+    if (!(await ptyInputSupported())) {
+      t.skip(PTY_SKIP_REASON);
+      return;
+    }
+    const output = await runExpect(`
+send {/bg --name "PTY Native" sleep 3}
+send "\\r"
+expect {
+  -re "Background jobs(.|\\n)*1 running(.|\\n)*PTY Native(.|\\n)*running" {}
+  timeout { puts "RUNNING_WIDGET_TIMEOUT"; exit 41 }
 }
 send "/bg-clear"
 send "\\r"
 expect {
   -re "No finished background task notices" {}
-  timeout { puts "INPUT_WHILE_VISIBLE_TIMEOUT"; exit 43 }
+  timeout { puts "INPUT_WITH_WIDGET_TIMEOUT"; exit 42 }
 }
 expect {
-  -re "PTY Visibility(.|\\n)*done" {}
-  timeout { puts "FINISHED_SIDEBAR_TIMEOUT"; exit 44 }
+  -re "bg completed" {}
+  timeout { puts "NATIVE_COMPLETION_TIMEOUT"; exit 43 }
 }
 send "/bg-clear"
 send "\\r"
 expect {
   -re "Cleared 1 finished" {}
-  timeout { puts "CLEAR_NOTICE_TIMEOUT"; exit 45 }
+  timeout { puts "CLEAR_NOTICE_TIMEOUT"; exit 44 }
 }
-`,
-      35,
-      { rows: 40, cols: 120 },
-      { rawOutput: true },
-    );
+`, 35, { rows: 40, cols: 120 }, { rawOutput: true });
     assert.match(stripAnsi(output), /Background jobs/);
-    assert.match(stripAnsi(output), /No jobs running/);
-    assert.match(stripAnsi(output), /PTY Visibility/);
     assert.match(stripAnsi(output), /Cleared 1 finished/);
-    assert.doesNotMatch(output, /bg [0-9]+ running/);
+    assert.doesNotMatch(stripAnsi(output), /No jobs running|0 running|bg [0-9]+ running/);
     assert.doesNotMatch(output, /48;2;183;223;255/);
   });
 
-  void it('hides the sidebar on an 80-column terminal while keeping /tasks available', { timeout: 45_000 }, async (t) => {
+  void it('shows native jobs on an 80-column terminal and keeps /tasks available', { timeout: 45_000 }, async (t) => {
     if (!(await ptyInputSupported())) {
       t.skip(PTY_SKIP_REASON);
       return;
     }
-    const output = await runExpect(
-      `
+    const output = await runExpect(`
+send {/bg --name "Native Narrow" sleep 2}
+send "\\r"
+expect {
+  -re "Background jobs(.|\\n)*Native Narrow" {}
+  timeout { puts "NARROW_WIDGET_TIMEOUT"; exit 45 }
+}
 send "/tasks"
 send "\\r"
 expect {
-  -re "bg tasks focused|No background tasks" {}
-  timeout { puts "NARROW_TASKS_TIMEOUT"; exit 46 }
+  -re "bg tasks focused" {}
+  timeout { puts "NARROW_MANAGER_TIMEOUT"; exit 46 }
 }
 send "x"
-`,
-      30,
-      { rows: 40, cols: 80 },
-      { rawOutput: true },
-    );
-    assert.match(stripAnsi(output), /bg tasks focused|No background tasks/);
-    assert.doesNotMatch(stripAnsi(output), /Background jobs/);
+`, 30, { rows: 40, cols: 80 }, { rawOutput: true });
+    assert.match(stripAnsi(output), /Background jobs/);
+    assert.match(stripAnsi(output), /bg tasks focused/);
   });
 
   void it(

@@ -1265,14 +1265,15 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
     },
   );
 
-  void it('mounts one passive sidebar only in TUI mode and removes it on shutdown', async () => {
+  void it('mounts one native job widget only in TUI mode and removes it on shutdown', async () => {
     const { session } = await harness();
     const widgets: boolean[] = [];
     const statuses: Array<string | undefined> = [];
     const ui: ExtensionUIContext = {
       ...makeStatusUi(session.extensionRunner.getUIContext(), statuses, []),
-      setWidget: (key, content) => {
+      setWidget: (key, content, options) => {
         assert.equal(key, 'background-tasks');
+        if (typeof content === 'function') assert.equal(options?.placement, 'aboveEditor');
         widgets.push(typeof content === 'function');
       },
     };
