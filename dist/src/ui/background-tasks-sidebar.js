@@ -5,11 +5,9 @@ const JOBS_MAX_WIDTH = 40;
 const TASKS_MIN_WIDTH = 64;
 const COLUMN_GAP = 2;
 export const TASKS_WIDGET_HOST_EVENT = 'pi-background-tasks:tasks-widget-host:v1';
-function rightAligned(value, width, inset = 0) {
-    const rightInset = Math.min(inset, Math.max(0, width - 1));
-    const content = truncateToWidth(value, width - rightInset);
-    return ' '.repeat(Math.max(0, width - rightInset - visibleWidth(content))) +
-        content + ' '.repeat(rightInset);
+function leftAligned(value, width, contentWidth, inset = 0) {
+    const leftInset = Math.min(inset, Math.max(0, contentWidth - 1));
+    return ' '.repeat(width - contentWidth + leftInset) + truncateToWidth(value, contentWidth - leftInset);
 }
 export class BackgroundTasksSidebar {
     tui;
@@ -63,9 +61,9 @@ export class BackgroundTasksSidebar {
         });
     }
     renderJobs(panel, width, contentWidth) {
-        const lines = [rightAligned(this.theme.fg('accent', panel.title), width)];
+        const lines = [leftAligned(this.theme.fg('accent', panel.title), width, contentWidth)];
         const spinner = SPINNER[this.frame] ?? SPINNER[0];
-        const rowWidth = Math.max(1, contentWidth - Math.min(2, width - 1));
+        const rowWidth = Math.max(1, contentWidth - Math.min(2, contentWidth - 1));
         for (const row of panel.rows) {
             const durationWidth = visibleWidth(row.duration);
             const content = rowWidth <= durationWidth + 3
@@ -73,10 +71,10 @@ export class BackgroundTasksSidebar {
                 : this.theme.fg('accent', `${spinner} `) +
                     truncateToWidth(this.theme.fg('dim', row.numberLabel) + this.theme.fg('accent', row.name), rowWidth - durationWidth - 3) +
                     this.theme.fg('dim', ` ${row.duration}`);
-            lines.push(rightAligned(content, width, 2));
+            lines.push(leftAligned(content, width, contentWidth, 2));
         }
         if (panel.hiddenCount > 0) {
-            lines.push(rightAligned(this.theme.fg('dim', `… and ${panel.hiddenCount} more`), width, 2));
+            lines.push(leftAligned(this.theme.fg('dim', `… and ${panel.hiddenCount} more`), width, contentWidth, 2));
         }
         return lines;
     }

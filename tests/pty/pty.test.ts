@@ -287,10 +287,13 @@ void describe('interactive PTY', () => {
       const jobItemLine = wideLines[firstJob];
       assert.ok(taskHeadingLine && jobsHeadingLine && taskItemLine && jobItemLine);
       assert.equal(taskHeadingLine.indexOf('●'), 0, 'Tasks heading must begin at the left edge');
-      assert.equal(jobsHeadingLine.indexOf('Background jobs') + 'Background jobs (4)'.length, 120,
-        'Jobs heading must reach the terminal right edge');
+      const jobsColumn = jobsHeadingLine.indexOf('●', 1);
+      assert.equal(jobsColumn, 80, 'Jobs heading begins at the left of its right-hand column');
       assert.equal(taskItemLine.search(/\S/u), 2, 'Tasks items keep their two-column left inset');
-      assert.equal(jobItemLine.trimEnd().length, 118, 'Jobs items mirror the two-column outer inset');
+      for (const line of wideLines.slice(firstJob, firstJob + 4)) {
+        assert.equal(line.search(/[✳✴✵✶✷✸✹✺✻✼✽]/u), jobsColumn + 2,
+          'Jobs of different lengths must share the same two-column indentation');
+      }
       const jobPositions = ['Job One', 'Job Two', 'Job Three'].map((name) => wideLines.findIndex((line) => line.includes(name)));
       assert.ok(jobPositions.every((position) => position >= 0));
       assert.deepEqual([...jobPositions].sort((a, b) => a - b), jobPositions, 'Jobs remain oldest-first');

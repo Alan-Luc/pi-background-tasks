@@ -35,7 +35,20 @@ function setup(tasks: BgTaskSnapshot[]) {
 }
 
 void describe('BackgroundTasksSidebar', () => {
-  void it('orders running jobs by start time and preserves elapsed suffixes at the mirrored right edge', (t) => {
+  void it('left-aligns the Jobs heading with equally indented rows of different lengths', (t) => {
+    t.mock.method(Date, 'now', () => 60_000);
+    const view = setup([task('short', 'running', 'Short'), task('long', 'running', 'A long name '.repeat(20))]);
+    for (const width of [36, 120]) {
+      const lines = view.sidebar.render(width);
+      const heading = (lines[0] ?? '').indexOf('●');
+      assert.equal(heading, Math.max(0, width - 40));
+      assert.equal((lines[1] ?? '').indexOf('✳'), heading + 2);
+      assert.equal((lines[2] ?? '').indexOf('✳'), heading + 2);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    }
+    view.sidebar.dispose();
+  });
+  void it('orders running jobs by start time and preserves elapsed suffixes under the Jobs heading', (t) => {
     const newer = task('newer', 'running', 'Newer');
     const oldest = task('oldest', 'running', 'Oldest');
     const tied = task('tied', 'running', 'Tied');
@@ -45,11 +58,11 @@ void describe('BackgroundTasksSidebar', () => {
     const tasks = [newer, oldest, tied];
     const clock = t.mock.method(Date, 'now', () => 60_000);
     const lines = setup(tasks).sidebar.render(120);
-    assert.match(lines[1] ?? '', /Oldest.*\(59s\)  $/);
-    assert.match(lines[2] ?? '', /Newer.*\(1s\)  $/);
-    assert.match(lines[3] ?? '', /Tied.*\(1s\)  $/);
-    assert.equal(visibleWidth(lines[0] ?? ''), 120, 'heading reaches the outer right edge');
-    assert.equal(visibleWidth((lines[1] ?? '').trimEnd()), 118, 'item inset mirrors Tasks indentation');
+    assert.match(lines[1] ?? '', /Oldest.*\(59s\)$/);
+    assert.match(lines[2] ?? '', /Newer.*\(1s\)$/);
+    assert.match(lines[3] ?? '', /Tied.*\(1s\)$/);
+    assert.ok(visibleWidth(lines[0] ?? '') <= 120);
+    assert.equal((lines[1] ?? '').search(/\S/u), (lines[0] ?? '').search(/\S/u) + 2);
     assert.deepEqual(tasks.map((item) => item.id), ['newer', 'oldest', 'tied']);
     assert.equal(clock.mock.callCount(), 1, 'one consistent clock reading per frame');
   });
@@ -65,12 +78,12 @@ void describe('BackgroundTasksSidebar', () => {
     const tasks = [newer, task('finished', 'completed'), oldest];
     const view = setup(tasks);
     const lines = view.sidebar.render(120);
-    assert.match(lines[1] ?? '', /✳ #1 Oldest \(59s\)  $/);
-    assert.match(lines[2] ?? '', /✳ #2 Newer \(1s\)  $/);
+    assert.match(lines[1] ?? '', /✳ #1 Oldest \(59s\)$/);
+    assert.match(lines[2] ?? '', /✳ #2 Newer \(1s\)$/);
     assert.ok(calls.some((call) => call.color === 'dim' && call.text === '#1 '));
     assert.deepEqual(tasks.map((job) => job.id), ['real-new-id', 'finished', 'real-old-id']);
     oldest.status = 'completed';
-    assert.match(view.sidebar.render(120)[1] ?? '', /✳ #1 Newer \(1s\)  $/);
+    assert.match(view.sidebar.render(120)[1] ?? '', /✳ #1 Newer \(1s\)$/);
     view.sidebar.dispose();
   });
 
@@ -92,7 +105,7 @@ void describe('BackgroundTasksSidebar', () => {
     assert.ok(wide[0]?.startsWith('● Tasks'));
     assert.match(wide[0] ?? '', /Background jobs \(1\)$/);
     assert.ok(wide[1]?.startsWith('  Task one'));
-    assert.match(wide[1] ?? '', /Job one.*\(12s\)  $/);
+    assert.match(wide[1] ?? '', /Job one.*\(12s\)$/);
     assert.equal(wide.length, 4, 'unequal heights share one native row');
     assert.ok(wide.every((line) => visibleWidth(line) <= 120));
     assert.ok((widths.at(-1) ?? 0) >= 64 && (widths.at(-1) ?? 120) < 120);
@@ -138,9 +151,9 @@ void describe('BackgroundTasksSidebar', () => {
     const view = setup([task('run', 'running', 'Native job')]);
     const lines = view.sidebar.render(120);
     assert.equal(lines[0]?.trimStart(), '● Background jobs (1)');
-    assert.match(lines[1] ?? '', /✳ #1 Native job \(0ms\)  $/);
-    assert.equal(visibleWidth(lines[0] ?? ''), 120);
-    assert.equal(visibleWidth((lines[1] ?? '').trimEnd()), 118);
+    assert.match(lines[1] ?? '', /✳ #1 Native job \(0ms\)$/);
+    assert.ok(visibleWidth(lines[0] ?? '') <= 120);
+    assert.equal((lines[1] ?? '').search(/\S/u), (lines[0] ?? '').search(/\S/u) + 2);
     assert.ok(lines.every((line) => visibleWidth(line) <= 120));
     assert.equal(view.overlays(), 0);
   });
@@ -176,7 +189,7 @@ void describe('BackgroundTasksSidebar', () => {
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
     }
     assert.match(view.sidebar.render(36)[1] ?? '', /✳ #1 界/);
-    assert.match(view.sidebar.render(36)[1] ?? '', /\)  $/);
+    assert.match(view.sidebar.render(36)[1] ?? '', /\)$/);
   });
 
   void it('sanitizes malicious names and excludes output and telemetry', (t) => {
@@ -200,7 +213,7 @@ void describe('BackgroundTasksSidebar', () => {
       job.startTime = 4_000_000 - scenario.elapsed;
       const line = setup([job]).sidebar.render(120)[1] ?? '';
       assert.ok(line.trimEnd().endsWith(scenario.expected));
-      assert.equal(visibleWidth(line.trimEnd()), 118);
+      assert.equal(visibleWidth(line.trimEnd()), 120);
       assert.ok(visibleWidth(line) <= 120);
     });
   }
