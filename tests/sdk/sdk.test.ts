@@ -10,6 +10,7 @@ import {
   createAgentSession,
   createEventBus,
   DefaultResourceLoader,
+  initTheme,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -17,6 +18,7 @@ import {
   type ExtensionAPI,
   type ExtensionUIContext,
 } from '@earendil-works/pi-coding-agent';
+import { ProcessTerminal, TuiMainScreen, type Component } from '@earendil-works/pi-tui';
 import { parseJsonText, type BgTaskSnapshot, type TaskStatus } from '../../src/core/common.js';
 import { BackgroundTaskRegistry } from '../../src/core/registry.js';
 import {
@@ -31,6 +33,8 @@ import {
   type BackgroundTaskExtensionTerminal,
 } from '../../src/core/extension-api.js';
 import backgroundTasksExtension from '../../src/extension.js';
+import { seedPeerTasks } from '../helpers/peer-tasks-fixture.js';
+import { TASKS_WIDGET_HOST_EVENT } from '../../src/ui/background-tasks-sidebar.js';
 
 const extensionPath = resolve('extensions/background-tasks.ts');
 const scriptedProviderPath = resolve('tests/scripted-provider/scripted-provider-extension.ts');
@@ -53,6 +57,7 @@ function resolvePiCli(): string | undefined {
 
 interface SdkHarnessOptions {
   eventBus?: EventBus | undefined;
+  additionalExtensionPaths?: string[] | undefined;
 }
 
 async function harness(options: SdkHarnessOptions = {}) {
@@ -67,7 +72,7 @@ async function harness(options: SdkHarnessOptions = {}) {
     cwd,
     agentDir,
     settingsManager,
-    additionalExtensionPaths: [extensionPath],
+    additionalExtensionPaths: [extensionPath, ...(options.additionalExtensionPaths ?? [])],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
@@ -1301,6 +1306,95 @@ console.log(JSON.stringify({ type: "message_end", message: secondMessage }));
       session.dispose();
     }
     assert.deepEqual(widgets, [true, false], 'shutdown removes the owned widget');
+  });
+
+  void it('hosts real peer Tasks in the native row across SDK reload without registering a second widget', async (t) => {
+    const peerRoot = process.env['PI_TASKS_SOURCE_ROOT'];
+    if (!peerRoot) {
+      t.skip('set PI_TASKS_SOURCE_ROOT to the writable pi-tasks source checkout');
+      return;
+    }
+    const absolutePeerRoot = resolve(peerRoot);
+    assert.ok(existsSync(join(absolutePeerRoot, 'src', 'index.ts')));
+    const root = await mkdtemp(join(tmpdir(), 'pi-bg-peer-sdk-'));
+    roots.push(root);
+    const taskStorePath = join(root, 'tasks.json');
+    const previousTasksPath = process.env['PI_TASKS'];
+    const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+    await seedPeerTasks(absolutePeerRoot, taskStorePath);
+    process.env['PI_TASKS'] = taskStorePath;
+    process.env['PI_CODING_AGENT_DIR'] = join(root, 'agent');
+    const widgets: string[] = [];
+    const components = new Map<string, Component & { dispose?(): void }>();
+    const tui = new TuiMainScreen(new ProcessTerminal());
+    tui.requestRender = () => {};
+    initTheme('dark', false);
+    let activeSession: AgentSession | undefined;
+    try {
+      const eventBus = createEventBus();
+      const { session } = await harness({ eventBus, additionalExtensionPaths: [join(absolutePeerRoot, 'src', 'index.ts')] });
+      let invalidMounts = 0;
+      for (const payload of [null, { version: 1, setTasksWidget: 'invalid' }, {
+        version: 2,
+        setTasksWidget: () => { invalidMounts++; return true; },
+      }]) eventBus.emit(TASKS_WIDGET_HOST_EVENT, payload);
+      assert.equal(invalidMounts, 0, 'incompatible presentation offers must not take over Tasks');
+      activeSession = session;
+      const ui: ExtensionUIContext = {
+        ...session.extensionRunner.getUIContext(),
+        setWidget: (key, content, options) => {
+          widgets.push(`${key}:${typeof content === 'function' ? 'mounted' : 'removed'}`);
+          components.get(key)?.dispose?.();
+          if (typeof content === 'function') {
+            assert.equal(options?.placement, 'aboveEditor');
+            components.set(key, content(tui, ui.theme));
+          } else {
+            components.delete(key);
+          }
+        },
+      };
+      const errors: unknown[] = [];
+      await session.bindExtensions({ uiContext: ui, mode: 'tui', onError: error => errors.push(error) });
+      assert.deepEqual(errors, []);
+      assert.deepEqual(widgets, ['background-tasks:mounted'], 'peer Tasks must use the host row, not register a second widget');
+      assert.match(components.get('background-tasks')?.render(120).join('\n') ?? '', /Native Task One/);
+
+      const taskList = session.getToolDefinition('TaskList');
+      assert.ok(taskList, 'the real peer TaskList tool should be registered');
+      const result: unknown = await taskList.execute(
+        'sdk-peer-task-list', {}, undefined, undefined, session.extensionRunner.createContext(),
+      );
+      assert.match(JSON.stringify(result), /Native Task One/);
+      assert.match(JSON.stringify(result), /Native Task Four/);
+      assert.deepEqual(session.getActiveToolNames().filter((name) => name.startsWith('Task')).sort(), [
+        'TaskCreate', 'TaskExecute', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TaskUpdate',
+      ]);
+
+      await session.reload();
+      assert.deepEqual(
+        widgets,
+        ['background-tasks:mounted', 'background-tasks:removed', 'background-tasks:mounted'],
+        'reload must detach the previous row and install one fresh host without a duplicate peer widget',
+      );
+      assert.deepEqual(errors, []);
+      assert.match(components.get('background-tasks')?.render(120).join('\n') ?? '', /Native Task One/);
+      const reloadedTaskList = session.getToolDefinition('TaskList');
+      assert.ok(reloadedTaskList, 'the peer task tools should survive reload');
+      const reloaded: unknown = await reloadedTaskList.execute(
+        'sdk-peer-task-list-after-reload', {}, undefined, undefined, session.extensionRunner.createContext(),
+      );
+      assert.match(JSON.stringify(reloaded), /Native Task One/);
+    } finally {
+      try {
+        if (activeSession) {
+          await activeSession.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
+        }
+      } finally {
+        activeSession?.dispose();
+        restoreEnvValue('PI_TASKS', previousTasksPath);
+        restoreEnvValue('PI_CODING_AGENT_DIR', previousAgentDir);
+      }
+    }
   });
 
   void it('clears finished sidebar notices without stopping running jobs', async () => {

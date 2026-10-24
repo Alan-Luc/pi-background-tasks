@@ -37,7 +37,9 @@ pi install . -l
 - `/tasks` and `/bg-tasks` open the task manager.
 - `/bg-clear` clears finished-task notices.
 
-Running jobs appear in a compact, right-aligned widget above the editor, using the same native layout as other Pi widgets. Its activity icons animate while jobs run, and it disappears when none remain; completed history stays in `/tasks`. There is no progress feed, floating overlay, or background-task footer badge.
+Running jobs appear above the editor, oldest-first, with animated activity icons and elapsed runtimes. A compatible pi-tasks extension shares the same native row: Tasks left, Jobs right, with level headings and mirrored outer margins. Narrow terminals stack the blocks; when no jobs remain, Tasks keeps the full width. Other widgets remain independent. There is no progress feed, floating overlay, or background-task footer badge.
+
+Shared layout requires the patched pi-tasks source checkout; npm `@tintinweb/pi-tasks@0.9.0` alone does not include the presentation bridge. Without it, Jobs still works as a standalone right-aligned widget.
 
 The default dock shortcut is **Shift↓**. `PI_BG_DOCK_SHORTCUT=ctrl+alt+b` selects the alternate shortcut, and `PI_BG_DOCK_SHORTCUT=off` disables the shortcut while retaining the commands. Shell selection and output limits are documented in [Configuration](docs/operations/configuration.md).
 

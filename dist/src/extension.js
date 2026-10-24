@@ -8,7 +8,7 @@ import { BackgroundTaskRegistry } from './core/registry.js';
 import { getProcessReloadShellOwnerV1, makeReloadShellIdentity, } from './core/reload-shell-owner.js';
 import { createShellPolicyGuidanceHandler, initializeShellPolicy } from './core/shell-policy.js';
 import { installBackgroundTaskExtensionApi, } from './core/extension-api.js';
-import { BackgroundTasksSidebar } from './ui/background-tasks-sidebar.js';
+import { BackgroundTasksSidebar, TASKS_WIDGET_HOST_EVENT } from './ui/background-tasks-sidebar.js';
 import { parseBackgroundTasksConfig } from './core/config.js';
 import { LazyModule, SynchronousActivationCloseFence } from './core/lazy-module.js';
 /**
@@ -377,11 +377,17 @@ export default async function backgroundTasksExtension(pi) {
         if (ctx.mode === 'tui' && ctx.hasUI && !sidebarUi) {
             ctx.ui.setWidget('background-tasks', (tui, theme) => {
                 sidebar?.dispose();
-                sidebar = new BackgroundTasksSidebar(tui, theme, {
+                const row = new BackgroundTasksSidebar(tui, theme, {
                     getTasks: () => registry.allTasks(),
                     isManagerOpen: () => dockOpen,
                 });
-                return sidebar;
+                sidebar = row;
+                const host = {
+                    version: 1,
+                    setTasksWidget: (create) => row.setTasksWidget(create ? () => create(tui, theme) : undefined),
+                };
+                pi.events.emit(TASKS_WIDGET_HOST_EVENT, host);
+                return row;
             }, { placement: 'aboveEditor' });
             sidebarUi = ctx.ui;
         }

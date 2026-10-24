@@ -45,7 +45,7 @@ import {
   type BackgroundTaskExtensionService,
 } from './core/extension-api.js';
 import type { BackgroundTaskForUi, TaskManagerResult } from './ui/background-tasks-manager.js';
-import { BackgroundTasksSidebar } from './ui/background-tasks-sidebar.js';
+import { BackgroundTasksSidebar, TASKS_WIDGET_HOST_EVENT, type TasksWidgetHostV1 } from './ui/background-tasks-sidebar.js';
 import { parseBackgroundTasksConfig } from './core/config.js';
 import { LazyModule, SynchronousActivationCloseFence } from './core/lazy-module.js';
 
@@ -512,11 +512,17 @@ export default async function backgroundTasksExtension(pi: ExtensionAPI): Promis
     if (ctx.mode === 'tui' && ctx.hasUI && !sidebarUi) {
       ctx.ui.setWidget('background-tasks', (tui, theme) => {
         sidebar?.dispose();
-        sidebar = new BackgroundTasksSidebar(tui, theme, {
+        const row = new BackgroundTasksSidebar(tui, theme, {
           getTasks: () => registry.allTasks(),
           isManagerOpen: () => dockOpen,
         });
-        return sidebar;
+        sidebar = row;
+        const host: TasksWidgetHostV1 = {
+          version: 1,
+          setTasksWidget: (create) => row.setTasksWidget(create ? () => create(tui, theme) : undefined),
+        };
+        pi.events.emit(TASKS_WIDGET_HOST_EVENT, host);
+        return row;
       }, { placement: 'aboveEditor' });
       sidebarUi = ctx.ui;
     }

@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isolatedTestEnv, stripAnsi } from '../helpers/normalize.js';
+import { seedPeerTasks } from '../helpers/peer-tasks-fixture.js';
 const extensionPath = resolve('extensions/background-tasks.ts');
 const expectBin = '/usr/bin/expect';
 
@@ -136,7 +137,212 @@ exit 0
   }
 }
 
+function findCommand(command: string): string | undefined {
+  const result = spawnSync('which', [command], { encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() || undefined : undefined;
+}
+
+function tmuxRun(tmux: string, socket: string, args: string[]) {
+  return spawnSync(tmux, ['-S', socket, ...args], { encoding: 'utf8', timeout: 10_000 });
+}
+
+async function waitForPane(
+  tmux: string,
+  socket: string,
+  predicate: (screen: string) => boolean,
+  message: string,
+  timeoutMs = 15_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let screen = '';
+  while (Date.now() < deadline) {
+    const capture = tmuxRun(tmux, socket, ['capture-pane', '-p', '-t', 'combined']);
+    assert.equal(capture.status, 0, capture.stderr);
+    screen = stripAnsi(capture.stdout).replace(/\r/g, '');
+    if (predicate(screen)) return screen;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  assert.fail(`${message}\nCurrent screen:\n${screen}`);
+}
+
+async function sendPaneKeys(tmux: string, socket: string, keys: string): Promise<void> {
+  const sent = tmuxRun(tmux, socket, ['send-keys', '-t', 'combined', '-l', '--', keys]);
+  assert.equal(sent.status, 0, sent.stderr);
+  const entered = tmuxRun(tmux, socket, ['send-keys', '-t', 'combined', 'Enter']);
+  assert.equal(entered.status, 0, entered.stderr);
+}
+
+async function sendPaneKey(tmux: string, socket: string, key: string): Promise<void> {
+  const sent = tmuxRun(tmux, socket, ['send-keys', '-t', 'combined', '-l', '--', key]);
+  assert.equal(sent.status, 0, sent.stderr);
+}
+
+function nativeLongJobDuration(screen: string): string | undefined {
+  const lines = screen.split('\n');
+  const heading = lines.findIndex((line) => line.includes('Background jobs (4)'));
+  if (heading < 0) return undefined;
+  const row = lines.slice(heading + 1, heading + 5).find((line) => line.includes('This is a deliberately'));
+  return row?.trimEnd().match(/\((\d+(?:ms|s))\)$/u)?.[1];
+}
+
 void describe('interactive PTY', () => {
+  void it('extracts elapsed time from native rows rather than transcript echoes', () => {
+    const screen = [
+      'Started: This is a deliberately long silent job name for truncation',
+      '● Background jobs (4)',
+      '✳ Job One (1s)', '✳ Job Two (1s)', '✳ Job Three (1s)',
+      '✳ This is a deliberately lo... (241ms)  ',
+    ].join('\n');
+    assert.equal(nativeLongJobDuration(screen), '241ms');
+    assert.equal(nativeLongJobDuration('Old transcript: This is a deliberately long job (23s)'), undefined);
+  });
+  void it('renders real peer Tasks beside oldest-first Jobs and preserves their runtimes', { timeout: 100_000 }, async (t) => {
+    const peerRoot = process.env['PI_TASKS_SOURCE_ROOT'];
+    const tmux = findCommand('tmux');
+    const pi = findCommand('pi');
+    if (!peerRoot) {
+      t.skip('set PI_TASKS_SOURCE_ROOT to the writable pi-tasks source checkout');
+      return;
+    }
+    if (!tmux || !pi) {
+      t.skip('combined native-row proof requires tmux and the pi CLI on PATH');
+      return;
+    }
+    const absolutePeerRoot = resolve(peerRoot);
+    assert.ok(existsSync(join(absolutePeerRoot, 'src', 'index.ts')));
+    const root = await mkdtemp(join('/tmp', `pbg-row-${String(process.pid)}-`));
+    const cwd = join(root, 'project');
+    const socket = join(root, 'tmux.sock');
+    const taskStorePath = join(root, 'tasks.json');
+    const siblingExtension = join(root, 'native-sibling.ts');
+    await mkdir(cwd, { recursive: true });
+    await writeFile(siblingExtension, `export default function (pi) {
+  pi.on('session_start', (_event, ctx) => {
+    if (ctx.mode === 'tui' && ctx.hasUI) {
+      ctx.ui.setWidget('test-native-sibling', () => ({
+        render: () => ['SIBLING-NATIVE-MARKER'],
+        invalidate() {},
+      }), { placement: 'aboveEditor' });
+    }
+  });
+}\n`, 'utf8');
+    await seedPeerTasks(absolutePeerRoot, taskStorePath);
+    const env = {
+      ...process.env,
+      ...isolatedTestEnv,
+      PI_TASKS: taskStorePath,
+      PI_CODING_AGENT_DIR: join(root, 'agent'),
+      PI_CODING_AGENT_SESSION_DIR: join(root, 'sessions'),
+      NPM_CONFIG_CACHE: '/tmp/pi-npm-cache',
+      TERM: 'xterm-256color',
+    };
+    let serverStarted = false;
+    try {
+      const started = spawnSync(tmux, [
+        '-S', socket, 'new-session', '-d', '-s', 'combined', '-x', '120', '-y', '40', '-c', cwd,
+        pi, '--offline', '--no-session', '--no-extensions',
+        '-e', join(absolutePeerRoot, 'src', 'index.ts'), '-e', extensionPath, '-e', siblingExtension,
+        '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-tools',
+      ], { encoding: 'utf8', timeout: 20_000, env });
+      assert.equal(started.status, 0, started.stderr);
+      serverStarted = true;
+      await waitForPane(tmux, socket, (screen) => screen.includes('(auto)'), 'Pi did not reach its ready prompt');
+
+      const jobNames = [
+        'Job One', 'Job Two', 'Job Three',
+        'This is a deliberately long silent job name for truncation',
+      ];
+      for (let index = 0; index < jobNames.length; index++) {
+        const name = jobNames[index];
+        assert.ok(name);
+        await sendPaneKeys(tmux, socket, `/bg --name "${name}" node -e "setTimeout(()=>{},30000)"`);
+        const count = index + 1;
+        await waitForPane(
+          tmux, socket,
+          (screen) => screen.includes(`Background jobs (${String(count)})`),
+          `the live Jobs row did not show ${String(count)} running jobs`,
+        );
+        await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+      }
+
+      const wideScreen = await waitForPane(
+        tmux, socket,
+        (screen) => screen.includes('Background jobs (4)') && screen.includes('Native Task One'),
+        'the current screen did not show both real extensions',
+      );
+      assert.ok(wideScreen.includes('SIBLING-NATIVE-MARKER'), 'the independent native sibling must remain visible');
+      const wideLines = wideScreen.split('\n');
+      const taskHeading = wideLines.findIndex((line) => line.includes('4 tasks'));
+      const jobsHeading = wideLines.findIndex((line) => line.includes('Background jobs (4)'));
+      const firstTask = wideLines.findIndex((line) => line.includes('Native Task One'));
+      const firstJob = wideLines.findIndex((line) => line.includes('Job One'));
+      assert.ok(taskHeading >= 0 && jobsHeading >= 0, 'both native headings must be visible');
+      assert.equal(taskHeading, jobsHeading, 'Tasks and Jobs headings must share a row');
+      assert.ok(firstTask >= 0 && firstJob >= 0);
+      assert.equal(firstTask, firstJob, 'first task and job rows must share a row');
+      t.diagnostic(`Current wide native rows:\n${wideLines.slice(taskHeading, taskHeading + 6).join('\n')}`);
+      const taskHeadingLine = wideLines[taskHeading];
+      const jobsHeadingLine = wideLines[jobsHeading];
+      const taskItemLine = wideLines[firstTask];
+      const jobItemLine = wideLines[firstJob];
+      assert.ok(taskHeadingLine && jobsHeadingLine && taskItemLine && jobItemLine);
+      assert.equal(taskHeadingLine.indexOf('●'), 0, 'Tasks heading must begin at the left edge');
+      assert.equal(jobsHeadingLine.indexOf('Background jobs') + 'Background jobs (4)'.length, 120,
+        'Jobs heading must reach the terminal right edge');
+      assert.equal(taskItemLine.search(/\S/u), 2, 'Tasks items keep their two-column left inset');
+      assert.equal(jobItemLine.trimEnd().length, 118, 'Jobs items mirror the two-column outer inset');
+      const jobPositions = ['Job One', 'Job Two', 'Job Three'].map((name) => wideLines.findIndex((line) => line.includes(name)));
+      assert.ok(jobPositions.every((position) => position >= 0));
+      assert.deepEqual([...jobPositions].sort((a, b) => a - b), jobPositions, 'Jobs remain oldest-first');
+
+      const firstDuration = nativeLongJobDuration(wideScreen);
+      assert.ok(firstDuration, 'truncated long-name rows must retain a visible elapsed suffix');
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1300));
+      const laterScreen = await waitForPane(tmux, socket, (screen) => nativeLongJobDuration(screen) !== undefined,
+        'the long-name Jobs row disappeared');
+      assert.notEqual(nativeLongJobDuration(laterScreen), firstDuration, 'the displayed per-job runtime must advance');
+      t.diagnostic(`Observed job runtime: ${firstDuration} → ${nativeLongJobDuration(laterScreen)}`);
+
+      const resized = tmuxRun(tmux, socket, ['resize-window', '-t', 'combined', '-x', '100', '-y', '40']);
+      assert.equal(resized.status, 0, resized.stderr);
+      const narrowScreen = await waitForPane(tmux, socket,
+        (screen) => screen.includes('Background jobs (4)') && screen.includes('Native Task One'),
+        'the resized screen did not retain both widgets');
+      const narrowLines = narrowScreen.split('\n');
+      assert.notEqual(
+        narrowLines.findIndex((line) => line.includes('4 tasks')),
+        narrowLines.findIndex((line) => line.includes('Background jobs (4)')),
+        'fewer than 64 remaining Tasks columns must stack the native blocks',
+      );
+
+      await sendPaneKeys(tmux, socket, '/bg-tasks');
+      await waitForPane(tmux, socket, (screen) => screen.includes('bg tasks focused'), 'the background manager did not open');
+      await sendPaneKey(tmux, socket, 'x');
+      const restored = await waitForPane(tmux, socket,
+        (screen) => screen.includes('Background jobs (4)') && screen.includes('Native Task One'),
+        'closing the manager did not restore the combined row');
+      assert.ok(restored.includes('SIBLING-NATIVE-MARKER'), 'manager close must not swallow the sibling widget');
+      assert.equal(restored.split('\n').filter((line) => line.includes('4 tasks')).length, 1,
+        'the real peer Tasks block must not be duplicated');
+
+      await sendPaneKeys(tmux, socket, '/bg-tasks');
+      await waitForPane(tmux, socket, (screen) => screen.includes('bg tasks focused'), 'the manager did not reopen for cleanup');
+      await sendPaneKey(tmux, socket, 'a');
+      await waitForPane(tmux, socket, screen => screen.includes('Press a/K again to stop all'), 'stop-all confirmation did not arm');
+      await sendPaneKey(tmux, socket, 'K');
+      await waitForPane(tmux, socket, screen => screen.includes('Stopped 4 running task'), 'the real background jobs did not stop');
+      await sendPaneKey(tmux, socket, 'x');
+      const idle = await waitForPane(tmux, socket,
+        (screen) => !screen.includes('Background jobs (4)') && screen.includes('Native Task One'),
+        'Jobs did not disappear after completion while Tasks remained');
+      assert.doesNotMatch(idle, /Background jobs \(4\)/u);
+      assert.ok(idle.includes('SIBLING-NATIVE-MARKER'), 'an unrelated native sibling must survive Jobs becoming idle');
+    } finally {
+      if (serverStarted) tmuxRun(tmux, socket, ['kill-server']);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   void it('hides the native job widget when no jobs are running', { timeout: 45_000 }, async (t) => {
     if (!(await ptyInputSupported())) {
       t.skip(PTY_SKIP_REASON);
