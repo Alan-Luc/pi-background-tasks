@@ -206,6 +206,33 @@ export interface ReloadShellOwnerHubV1 {
   isCurrentLease(lease: ReloadShellActivationLeaseV1): boolean;
 }
 
+export interface BgTaskWorkStatusV1 {
+  readonly task: BgTaskSnapshot;
+  readonly terminalPublicationState: TerminalPublicationState | 'unknown';
+  readonly terminalPublicationAbandonReason?: TerminalPublicationAbandonReason | undefined;
+  readonly terminalPublished: boolean | 'unknown';
+  readonly terminalPublishInFlight: boolean | 'unknown';
+  readonly terminalEmitInFlight: boolean | 'unknown';
+  readonly notificationInFlight: boolean | 'unknown';
+  /** delivered means sender/host acceptance, not turn execution, human receipt, or clearance. */
+  readonly notificationState: 'not-requested' | 'pending' | 'delivered' | 'unknown';
+}
+
+export interface BgWorkStatusV1 {
+  readonly schema_version: 'pi-background-tasks.work-status.v1';
+  readonly version: 1;
+  readonly sessionId: string;
+  readonly generation: string;
+  readonly revision: string;
+  readonly activeAdmissions: number;
+  readonly shuttingDown: boolean;
+  readonly taskAdmissionsClosed: boolean;
+  readonly terminalPublicationClosed: boolean;
+  readonly historyComplete: boolean;
+  readonly incompletenessReasons: readonly string[];
+  readonly tasks: readonly BgTaskWorkStatusV1[];
+}
+
 export interface BgTaskSnapshot {
   id: string;
   name?: string | undefined;
@@ -262,6 +289,7 @@ export interface BgTask extends Omit<BgTaskSnapshot, 'name'> {
   terminalPublishInFlight?: boolean | undefined;
   /** True only while the synchronous terminal emitter itself is on the stack. */
   terminalEmitInFlight?: boolean | undefined;
+  notificationInFlight?: boolean | undefined;
   terminalPublishRetryHandle?: NodeJS.Timeout | undefined;
   /** Optional protocol barrier used by EventBus run requests so early child exits cannot publish before the run response is observable. */
   terminalPublicationGate?: Promise<void> | undefined;
