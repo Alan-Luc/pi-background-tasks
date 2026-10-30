@@ -24,7 +24,9 @@ import {
   type BackgroundTaskSpawn,
 } from '../../src/core/registry.js';
 import type { TaskkillOutcome, WindowsKillPhase } from '../../src/core/windows-taskkill.js';
-import type { BgTaskSnapshot } from '../../src/core/common.js';
+import type { BgTaskSnapshot, ReloadShellOwnerHubV1 } from '../../src/core/common.js';
+import { createReloadShellOwnerHubForTests, makeReloadShellIdentity } from '../../src/core/reload-shell-owner.js';
+import { realpathSync } from 'node:fs';
 
 class MemoryEventBus implements EventBus {
   private readonly listeners = new Map<string, Set<(data: unknown) => void>>();
@@ -144,6 +146,9 @@ interface ProtocolHarness {
 async function createProtocolHarness(
   options: {
     onSpawn?: ((child: FakeChild) => void) | undefined;
+    onNotification?: ((bus: MemoryEventBus) => void) | undefined;
+    maxRecentTasks?: number | undefined;
+    reloadShellOwner?: ReloadShellOwnerHubV1 | undefined;
   } = {},
 ): Promise<ProtocolHarness> {
   const root = await mkdtemp(join(tmpdir(), 'pi-bg-api-protocol-'));
@@ -203,7 +208,11 @@ async function createProtocolHarness(
   };
   const registry = new BackgroundTaskRegistry({
     makeTaskId: () => `bproto${String(++idSeq).padStart(3, '0')}`,
-    sendCompletionNotification: () => {},
+    ...(options.reloadShellOwner === undefined ? {} : { reloadShellOwner: options.reloadShellOwner }),
+    sendCompletionNotification: () => options.onNotification?.(bus),
+    ...(options.maxRecentTasks === undefined
+      ? {}
+      : { maxRecentTasks: options.maxRecentTasks }),
     killGraceMs: 20,
     stopWaitMs: 500,
     platform: 'linux',
@@ -424,7 +433,7 @@ void describe('background EventBus protocol', () => {
       });
       assert.equal(unknown.ok, false);
       assert.equal(unknown.operation, 'bogus');
-      assert.match(unknown.ok ? '' : unknown.error, /capabilities, run, status, logs, kill/u);
+      assert.match(unknown.ok ? '' : unknown.error, /capabilities, run, status, work-status, logs, kill/u);
 
       const extra = await emitRequest(h.bus, {
         schema_version: BG_REQUEST_SCHEMA,
@@ -500,6 +509,7 @@ void describe('background EventBus protocol', () => {
         'run_completion_trigger',
         'run_is_agent',
         'status',
+        'work_status',
       ]);
 
       h.setCtx(undefined);
@@ -523,6 +533,14 @@ void describe('background EventBus protocol', () => {
       });
       assert.equal(shutdown.ok, false);
       assert.match(shutdown.ok ? '' : shutdown.error, /shutting down/u);
+      const workStatusShutdown = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-shutdown',
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+      assert.equal(workStatusShutdown.ok, false);
+      assert.match(workStatusShutdown.ok ? '' : workStatusShutdown.error, /shutting down/u);
     } finally {
       h.close();
       await rm(h.root, { recursive: true, force: true });
@@ -889,6 +907,21 @@ void describe('background EventBus protocol', () => {
       assert.equal(Reflect.get(task, 'terminalPublicationAbandonReason'), 'retry_exhausted');
       assert.equal(task.terminalPublishRetryHandle, undefined);
       assert.equal(h.errors.length, 3, 'publisher diagnostics must be bounded with attempts');
+      const status = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-abandoned',
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+      if (!status.ok) assert.fail(status.error);
+      assert.ok(isRecord(status.result));
+      const records = Reflect.get(status.result, 'tasks');
+      assert.ok(Array.isArray(records));
+      const record: unknown = records[0];
+      assert.ok(isRecord(record));
+      assert.equal(Reflect.get(record, 'terminalPublicationState'), 'abandoned');
+      assert.equal(Reflect.get(record, 'terminalPublicationAbandonReason'), 'retry_exhausted');
+      assert.equal(Reflect.get(record, 'terminalPublished'), false);
     } finally {
       unsubscribeFailure();
       unsubscribeReceiver();
@@ -966,6 +999,397 @@ void describe('background EventBus protocol', () => {
       }
       h.close();
       await rm(h.root, { recursive: true, force: true });
+    }
+  });
+
+  void it('reports owner-correlated work status without changing legacy status', async () => {
+    const h = await createHarness();
+    try {
+      const legacy = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'legacy-status',
+        operation: 'status',
+        payload: {},
+      });
+      assert.equal(legacy.ok, true);
+      assert.deepEqual(legacy.ok ? legacy.result : undefined, { tasks: [] });
+
+      const empty = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-empty',
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+      if (!empty.ok) assert.fail(empty.error);
+      const snapshot = empty.result;
+      assert.ok(isRecord(snapshot));
+      assert.equal(Reflect.get(snapshot, 'schema_version'), 'pi-background-tasks.work-status.v1');
+      assert.equal(Reflect.get(snapshot, 'sessionId'), h.ctx.sessionId);
+      assert.equal(typeof Reflect.get(snapshot, 'generation'), 'string');
+      assert.equal(Reflect.get(snapshot, 'historyComplete'), true);
+      assert.equal(Reflect.get(snapshot, 'activeAdmissions'), 0);
+      assert.deepEqual(Reflect.get(snapshot, 'tasks'), []);
+
+      const other = await createHarness();
+      try {
+        const otherStatus = await emitRequest(other.bus, {
+          schema_version: BG_REQUEST_SCHEMA,
+          request_id: 'work-status-other-generation',
+          operation: 'work-status',
+          payload: { sessionId: other.ctx.sessionId },
+        });
+        if (!otherStatus.ok) assert.fail(otherStatus.error);
+        assert.notEqual(
+          Reflect.get(snapshot, 'generation'),
+          Reflect.get(otherStatus.result, 'generation'),
+        );
+      } finally {
+        other.close();
+        await rm(other.root, { recursive: true, force: true });
+      }
+
+      for (const [requestId, sessionId] of [
+        ['work-status-wrong', 'foreign-session'],
+        ['work-status-missing', undefined],
+      ] as const) {
+        const payload = sessionId === undefined ? {} : { sessionId };
+        const denied = await emitRequest(h.bus, {
+          schema_version: BG_REQUEST_SCHEMA,
+          request_id: requestId,
+          operation: 'work-status',
+          payload,
+        });
+        assert.equal(denied.ok, false);
+      }
+
+      h.setCtx({ ...h.ctx, sessionId: 'replacement-session' });
+      const changedOwner = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-changed-owner',
+        operation: 'work-status',
+        payload: { sessionId: 'replacement-session' },
+      });
+      if (!changedOwner.ok) assert.fail(changedOwner.error);
+      assert.equal(Reflect.get(changedOwner.result, 'historyComplete'), false);
+      assert.deepEqual(Reflect.get(changedOwner.result, 'incompletenessReasons'), [
+        'owner_session_changed',
+      ]);
+
+      const missingOwner = await createProtocolHarness();
+      try {
+        const ownerlessContext = { ...missingOwner.ctx };
+        delete ownerlessContext.sessionId;
+        await missingOwner.registry.startTask(
+          ownerlessContext,
+          'echo unknown owner',
+          { notifyOnCompletion: false },
+        );
+        const unknownOwner = await emitRequest(missingOwner.bus, {
+          schema_version: BG_REQUEST_SCHEMA,
+          request_id: 'work-status-unknown-admission-owner',
+          operation: 'work-status',
+          payload: { sessionId: missingOwner.ctx.sessionId },
+        });
+        if (!unknownOwner.ok) assert.fail(unknownOwner.error);
+        assert.equal(Reflect.get(unknownOwner.result, 'historyComplete'), false);
+        const reasons = Reflect.get(unknownOwner.result, 'incompletenessReasons');
+        assert.ok(Array.isArray(reasons));
+        assert.ok(reasons.includes('unknown_admission_owner'));
+      } finally {
+        missingOwner.close();
+        await cleanupRoot(missingOwner.root);
+      }
+    } finally {
+      h.close();
+      await rm(h.root, { recursive: true, force: true });
+    }
+  });
+
+  void it('captures active admissions before task registration', async () => {
+    const h = await createProtocolHarness();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const originalEnsureRuntimeDir = h.registry.ensureRuntimeDir.bind(h.registry);
+    h.registry.ensureRuntimeDir = async (ctx) => {
+      entered.resolve(undefined);
+      await release.promise;
+      return originalEnsureRuntimeDir(ctx);
+    };
+    try {
+      h.bus.emit(BG_REQUEST_CHANNEL, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-admission-run',
+        operation: 'run',
+        payload: {
+          name: 'Admission status',
+          command: 'echo admission',
+          isAgent: false,
+          notifyOnCompletion: false,
+          triggerOnCompletion: false,
+        },
+      });
+      await entered.promise;
+      const status = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-admission',
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+      if (!status.ok) assert.fail(status.error);
+      assert.ok(isRecord(status.result));
+      assert.equal(Reflect.get(status.result, 'activeAdmissions'), 1);
+      assert.deepEqual(Reflect.get(status.result, 'tasks'), []);
+
+      release.resolve(undefined);
+      await h.registry.waitForTaskAdmissions();
+      assert.equal(h.registry.allTasks().length, 1);
+    } finally {
+      release.resolve(undefined);
+      h.close();
+      await rm(h.root, { recursive: true, force: true });
+    }
+  });
+
+  for (const surviveReload of [false, true]) {
+    void it(`explains a registered task rolled back during ${surviveReload ? 'reloadable' : 'regular'} admission`, async () => {
+      const hub = createReloadShellOwnerHubForTests();
+      let h: ProtocolHarness;
+      const observeThenFail = () => {
+        const observed = h.registry.workStatus(h.ctx.sessionId ?? '');
+        assert.equal(observed.activeAdmissions, 1);
+        assert.equal(observed.tasks.length, 1);
+        assert.equal(observed.tasks[0]?.task.status, 'running');
+        assert.equal(observed.historyComplete, true);
+        if (!surviveReload) h.registry.closeTaskAdmissions();
+        throw new Error('controlled failure after task registration');
+      };
+      h = await createProtocolHarness({
+        reloadShellOwner: { ...hub, registerExecution: observeThenFail },
+        onSpawn: surviveReload ? undefined : observeThenFail,
+      });
+      const identity = makeReloadShellIdentity(h.ctx.sessionId ?? '', realpathSync(h.ctx.cwd));
+      const claim = hub.beginActivation(identity, 'startup', 'c'.repeat(32));
+      const lease = hub.commitActivation(claim, await h.registry.stageReloadActivation(claim));
+      try {
+        await assert.rejects(
+          h.registry.startTask(h.ctx, 'echo rolled back', { surviveReload, notifyOnCompletion: false }),
+          /controlled failure after task registration|admissions have closed/,
+        );
+        const after = h.registry.workStatus(h.ctx.sessionId ?? '');
+        assert.equal(after.activeAdmissions, 0);
+        assert.deepEqual(after.tasks, []);
+        assert.equal(after.historyComplete, false);
+        assert.ok(after.incompletenessReasons.includes('admission_rolled_back'));
+      } finally {
+        h.registry.releaseReloadActivation(lease);
+        h.close();
+        await cleanupRoot(h.root);
+      }
+    });
+  }
+
+  void it('marks imported reload task ownership incomplete', async () => {
+    const hub = createReloadShellOwnerHubForTests();
+    const h = await createProtocolHarness({ reloadShellOwner: hub });
+    const fresh = await createProtocolHarness({ reloadShellOwner: hub });
+    const identity = makeReloadShellIdentity(h.ctx.sessionId ?? '', realpathSync(h.ctx.cwd));
+    const firstClaim = hub.beginActivation(identity, 'startup', 'd'.repeat(32));
+    const firstLease = hub.commitActivation(firstClaim, await h.registry.stageReloadActivation(firstClaim));
+    let freshLease;
+    try {
+      const task = await h.registry.startTask(h.ctx, 'echo imported', {
+        surviveReload: true, notifyOnCompletion: false,
+      });
+      h.registry.prepareReloadHandoff(firstLease);
+      const claim = hub.beginActivation(identity, 'reload', 'e'.repeat(32));
+      freshLease = hub.commitActivation(claim, await fresh.registry.stageReloadActivation(claim));
+      const imported = fresh.registry.workStatus(fresh.ctx.sessionId ?? '');
+      assert.equal(imported.tasks.length, 1);
+      assert.equal(imported.tasks[0]?.task.id, task.id);
+      assert.equal(imported.historyComplete, false);
+      assert.deepEqual(imported.incompletenessReasons, ['imported_task_owner_unknown']);
+      h.children[0]?.close(0, null);
+      await waitForCondition(() => task.terminalPublicationState === 'delivered', 'imported terminal delivery');
+    } finally {
+      if (freshLease !== undefined) fresh.registry.releaseReloadActivation(freshLease);
+      h.registry.releaseReloadActivation(firstLease);
+      h.close();
+      fresh.close();
+      await cleanupRoot(h.root);
+      await cleanupRoot(fresh.root);
+    }
+  });
+
+  void it('does not report reentrant notification as delivered before sender success', async () => {
+    const h = await createProtocolHarness({
+      onNotification(bus) {
+        bus.emit(BG_REQUEST_CHANNEL, {
+          schema_version: BG_REQUEST_SCHEMA,
+          request_id: 'work-status-reentrant-notification',
+          operation: 'work-status',
+          payload: { sessionId: 'extension-api-protocol-unit' },
+        });
+        throw new Error('notification sender failed after status observation');
+      },
+    });
+    const responses: BackgroundTaskExtensionResponse[] = [];
+    const unsubscribe = h.bus.on(BG_RESPONSE_CHANNEL, (data) => {
+      const response = requireResponse(data);
+      if (response.request_id === 'work-status-reentrant-notification') responses.push(response);
+    });
+    let taskId: string | undefined;
+    try {
+      const run = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'reentrant-notification-run',
+        operation: 'run',
+        payload: {
+          name: 'Reentrant Notification',
+          command: 'echo reentrant-notification',
+          isAgent: false,
+          notifyOnCompletion: true,
+          triggerOnCompletion: true,
+        },
+      });
+      if (!run.ok) assert.fail(run.error);
+      const currentTaskId = requireTask(run.result, 'reentrant notification task').id;
+      taskId = currentTaskId;
+      h.children[0]?.close(0, null);
+      await waitForCondition(() => responses.length === 1, 'reentrant work-status response');
+
+      const reentrant = responses[0];
+      if (!reentrant?.ok) assert.fail(reentrant?.error ?? 'missing reentrant response');
+      assert.ok(isRecord(reentrant.result));
+      const records = Reflect.get(reentrant.result, 'tasks');
+      assert.ok(Array.isArray(records));
+      const task: unknown = records.find(
+        (record: unknown) => isRecord(record) && Reflect.get(record, 'task') !== undefined,
+      );
+      assert.ok(isRecord(task));
+      assert.equal(
+        Reflect.get(task, 'notificationInFlight'),
+        true,
+        'the notification callback is still on the stack during reentrant status',
+      );
+      assert.equal(
+        Reflect.get(task, 'notificationState'),
+        'pending',
+        'notification callback has not returned successfully while reentrant status is observed',
+      );
+
+      await waitForCondition(
+        () => h.registry.resolveTask(currentTaskId).notified === false,
+        'failed sender resets legacy notified state',
+      );
+      const afterFailure = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: 'work-status-after-notification-failure',
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+      if (!afterFailure.ok) assert.fail(afterFailure.error);
+      assert.ok(isRecord(afterFailure.result));
+      const afterRecords = Reflect.get(afterFailure.result, 'tasks');
+      assert.ok(Array.isArray(afterRecords));
+      const afterTask: unknown = afterRecords[0];
+      assert.ok(isRecord(afterTask));
+      assert.equal(Reflect.get(afterTask, 'notificationInFlight'), false);
+      assert.equal(Reflect.get(afterTask, 'notificationState'), 'unknown');
+    } finally {
+      unsubscribe();
+      if (taskId !== undefined) h.children[0]?.close(null, 'SIGTERM');
+      h.close();
+      await cleanupRoot(h.root);
+    }
+  });
+
+  void it('reports terminal delivery facts and latches pruned history incomplete', async () => {
+    const h = await createProtocolHarness({ maxRecentTasks: 1 });
+    const requestWorkStatus = async (requestId: string) =>
+      emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: requestId,
+        operation: 'work-status',
+        payload: { sessionId: h.ctx.sessionId },
+      });
+    const start = async (requestId: string, notifyOnCompletion = false) => {
+      const response = await emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA,
+        request_id: requestId,
+        operation: 'run',
+        payload: {
+          name: requestId,
+          command: `echo ${requestId}`,
+          isAgent: false,
+          notifyOnCompletion,
+          triggerOnCompletion: false,
+        },
+      });
+      assert.equal(response.ok, true, response.ok ? 'ok' : response.error);
+      return requireTask(response.ok ? response.result : undefined, requestId);
+    };
+    try {
+      const first = await start('work-status-first', true);
+      const pendingNotification = await requestWorkStatus('work-status-notification-pending');
+      if (!pendingNotification.ok) assert.fail(pendingNotification.error);
+      assert.ok(isRecord(pendingNotification.result));
+      const pendingTasks = Reflect.get(pendingNotification.result, 'tasks');
+      assert.ok(Array.isArray(pendingTasks));
+      const pendingRecord: unknown = pendingTasks[0];
+      assert.ok(isRecord(pendingRecord));
+      assert.equal(Reflect.get(pendingRecord, 'notificationState'), 'pending');
+      h.children[0]?.close(0, null);
+      await waitForCondition(
+        () => h.registry.resolveTask(first.id).terminalPublicationState === 'delivered',
+        'first terminal delivery',
+      );
+      const delivered = await requestWorkStatus('work-status-delivered');
+      if (!delivered.ok) assert.fail(delivered.error);
+      assert.ok(isRecord(delivered.result));
+      const records = Reflect.get(delivered.result, 'tasks');
+      assert.ok(Array.isArray(records));
+      const firstRecord: unknown = records[0];
+      assert.ok(isRecord(firstRecord));
+      assert.equal(Reflect.get(firstRecord, 'terminalPublicationState'), 'delivered');
+      assert.equal(Reflect.get(firstRecord, 'terminalPublished'), true);
+      assert.equal(Reflect.get(firstRecord, 'notificationState'), 'delivered');
+
+      const second = await start('work-status-second');
+      h.children[1]?.close(0, null);
+      await waitForCondition(
+        () => h.registry.resolveTask(second.id).terminalPublicationState === 'delivered',
+        'second terminal delivery and pruning',
+      );
+      const pruned = await requestWorkStatus('work-status-pruned');
+      if (!pruned.ok) assert.fail(pruned.error);
+      assert.ok(isRecord(pruned.result));
+      assert.equal(Reflect.get(pruned.result, 'historyComplete'), false);
+      assert.deepEqual(Reflect.get(pruned.result, 'incompletenessReasons'), [
+        'history_pruned',
+      ]);
+      const prunedTasks = Reflect.get(pruned.result, 'tasks');
+      assert.ok(Array.isArray(prunedTasks));
+      const optedOutRecord: unknown = prunedTasks[0];
+      assert.ok(isRecord(optedOutRecord));
+      assert.equal(Reflect.get(optedOutRecord, 'notificationState'), 'not-requested');
+      assert.equal(h.registry.allTasks().length, 1, 'retention cap remains enforced');
+
+      const stoppedUnfinalized = h.registry.resolveTask(second.id);
+      stoppedUnfinalized.finalized = false;
+      const uncertain = await requestWorkStatus('work-status-stopped-unfinalized');
+      if (!uncertain.ok) assert.fail(uncertain.error);
+      assert.ok(isRecord(uncertain.result));
+      const uncertainTasks = Reflect.get(uncertain.result, 'tasks');
+      assert.ok(Array.isArray(uncertainTasks));
+      const uncertainRecord: unknown = uncertainTasks[0];
+      assert.ok(isRecord(uncertainRecord));
+      assert.equal(Reflect.get(uncertainRecord, 'terminalPublicationState'), 'unknown');
+      assert.equal(Reflect.get(uncertainRecord, 'terminalPublished'), 'unknown');
+      assert.equal(Reflect.get(uncertainRecord, 'terminalEmitInFlight'), 'unknown');
+    } finally {
+      for (const child of h.children) child.close(null, 'SIGTERM');
+      h.close();
+      await cleanupRoot(h.root);
     }
   });
 
