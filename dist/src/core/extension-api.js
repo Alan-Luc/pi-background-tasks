@@ -21,6 +21,7 @@ export const BG_EXTENSION_CAPABILITIES = Object.freeze({
     run_is_agent: true,
     run_completion_trigger: true,
     status: true,
+    work_status: true,
     logs: true,
     logs_bounded: true,
     kill: true,
@@ -64,11 +65,12 @@ function requireOperation(value, label) {
     if (value === 'capabilities' ||
         value === 'run' ||
         value === 'status' ||
+        value === 'work-status' ||
         value === 'logs' ||
         value === 'kill') {
         return value;
     }
-    throw new Error(`${label} must be one of capabilities, run, status, logs, kill`);
+    throw new Error(`${label} must be one of capabilities, run, status, work-status, logs, kill`);
 }
 function operationEcho(value) {
     return typeof value === 'string' && value.length > 0 ? value : 'malformed';
@@ -105,6 +107,11 @@ function parseStatusPayload(value) {
     }
     return out;
 }
+function parseWorkStatusPayload(value) {
+    const payload = requireRecord(value, 'work-status.payload');
+    assertClosed(payload, ['sessionId'], 'work-status.payload');
+    return { sessionId: requireNonEmptyString(payload['sessionId'], 'work-status.payload.sessionId') };
+}
 function parseLogsPayload(value) {
     const payload = requireRecord(value, 'logs.payload');
     assertClosed(payload, ['taskId', 'maxBytes', 'tail'], 'logs.payload');
@@ -131,6 +138,8 @@ function parsePayload(operation, value) {
             return parseRunPayload(value);
         case 'status':
             return parseStatusPayload(value);
+        case 'work-status':
+            return parseWorkStatusPayload(value);
         case 'logs':
             return parseLogsPayload(value);
         case 'kill':
@@ -233,6 +242,9 @@ function runPayload(value) {
 function statusPayload(value) {
     return value;
 }
+function workStatusPayload(value) {
+    return value;
+}
 function logsPayload(value) {
     return value;
 }
@@ -305,6 +317,16 @@ class InstalledBackgroundTaskExtensionService {
             if (ctx === undefined) {
                 throw new Error('pi-background-tasks EventBus service is unavailable before session_start');
             }
+            if (request.operation === 'work-status') {
+                const { sessionId } = workStatusPayload(request.payload);
+                if (typeof ctx.sessionId !== 'string' || ctx.sessionId.length === 0) {
+                    throw new Error('work-status owner session is unavailable');
+                }
+                if (sessionId !== ctx.sessionId)
+                    throw new Error('work-status sessionId does not match current owner');
+                this.emitResponse(successResponse(request, this.registry.workStatus(sessionId)));
+                return;
+            }
             const result = await this.execute(ctx, request, terminalGate?.promise);
             if (this.isClosed())
                 return;
@@ -341,6 +363,8 @@ class InstalledBackgroundTaskExtensionService {
                 const task = await this.registry.startTask(ctx, payload.command, options);
                 return this.registry.snapshot(task);
             }
+            case 'work-status':
+                throw new Error('work-status must be handled synchronously');
             case 'status': {
                 const payload = statusPayload(request.payload);
                 const tasks = payload.taskId

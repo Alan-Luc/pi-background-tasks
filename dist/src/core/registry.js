@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createWriteStream, existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -494,6 +494,9 @@ function noopOnChange() {
 }
 export class BackgroundTaskRegistry {
     tasks = new Map();
+    generation = randomUUID();
+    historyIncompleteReasons = new Set();
+    admittedSessionId;
     runtimeDir;
     shuttingDown = false;
     taskAdmissionsClosed = false;
@@ -576,11 +579,21 @@ export class BackgroundTaskRegistry {
         }
         return Math.max(1, Math.floor(candidate));
     }
-    beginTaskAdmission(kind) {
+    beginTaskAdmission(kind, sessionId) {
         this.assertTaskAdmissionOpen(kind);
+        if (sessionId === undefined || sessionId.length === 0) {
+            this.historyIncompleteReasons.add('unknown_admission_owner');
+        }
+        else if (this.admittedSessionId === undefined) {
+            this.admittedSessionId = sessionId;
+        }
+        else if (this.admittedSessionId !== sessionId) {
+            this.historyIncompleteReasons.add('owner_session_changed');
+        }
         const controller = new AbortController();
         const admission = {
             kind,
+            sessionId,
             controller,
             deadlineAt: Date.now() + this.taskAdmissionTimeoutMs,
             timeoutMs: this.taskAdmissionTimeoutMs,
@@ -721,6 +734,58 @@ export class BackgroundTaskRegistry {
     allTasks() {
         return [...this.tasks.values()];
     }
+    workStatus(sessionId) {
+        if (this.admittedSessionId === undefined) {
+            this.admittedSessionId = sessionId;
+        }
+        else if (this.admittedSessionId !== sessionId) {
+            this.historyIncompleteReasons.add('owner_session_changed');
+        }
+        const tasks = [...this.tasks.values()].map((task) => {
+            const knownTerminal = task.finalized === true || task.status === 'running';
+            const notificationState = !task.notifyOnCompletion
+                ? 'not-requested'
+                : task.notificationInFlight === true
+                    ? 'pending'
+                    : task.notified
+                        ? 'delivered'
+                        : task.status === 'running'
+                            ? 'pending'
+                            : 'unknown';
+            return {
+                task: this.snapshot(task),
+                terminalPublicationState: knownTerminal ? task.terminalPublicationState : 'unknown',
+                terminalPublicationAbandonReason: task.terminalPublicationAbandonReason,
+                terminalPublished: knownTerminal ? task.terminalPublished : 'unknown',
+                terminalPublishInFlight: knownTerminal ? task.terminalPublishInFlight === true : 'unknown',
+                terminalEmitInFlight: knownTerminal ? task.terminalEmitInFlight === true : 'unknown',
+                notificationInFlight: knownTerminal ? task.notificationInFlight === true : 'unknown',
+                notificationState,
+            };
+        });
+        const snapshot = {
+            schema_version: 'pi-background-tasks.work-status.v1',
+            version: 1,
+            sessionId,
+            generation: this.generation,
+            activeAdmissions: this.activeTaskAdmissions.size,
+            shuttingDown: this.shuttingDown,
+            taskAdmissionsClosed: this.taskAdmissionsClosed,
+            terminalPublicationClosed: this.terminalPublicationClosed,
+            historyComplete: this.historyIncompleteReasons.size === 0 &&
+                !this.shuttingDown &&
+                !this.taskAdmissionsClosed &&
+                !this.terminalPublicationClosed,
+            incompletenessReasons: [
+                ...this.historyIncompleteReasons,
+                ...(this.shuttingDown ? ['registry_shutdown'] : []),
+                ...(this.taskAdmissionsClosed && !this.shuttingDown ? ['task_admissions_closed'] : []),
+                ...(this.terminalPublicationClosed && !this.shuttingDown ? ['terminal_publication_closed'] : []),
+            ],
+            tasks,
+        };
+        return { ...snapshot, revision: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
+    }
     snapshot(task) {
         return snapshot(task);
     }
@@ -752,6 +817,7 @@ export class BackgroundTaskRegistry {
                 task.reloadHostDeliverySettled = false;
                 task.reloadHostNotificationSettled = false;
                 execution.updateLeaseAudit(claim.generation, (task.reloadSurvival?.handoffCount ?? 0) + 1);
+                this.historyIncompleteReasons.add('imported_task_owner_unknown');
                 this.tasks.set(task.id, task);
                 staged.push(execution);
             }
@@ -893,7 +959,10 @@ export class BackgroundTaskRegistry {
         });
     }
     async discardUnspawnedTask(task, paths) {
-        this.tasks.delete(task.id);
+        if (this.tasks.get(task.id) === task) {
+            this.tasks.delete(task.id);
+            this.historyIncompleteReasons.add('admission_rolled_back');
+        }
         task.finalized = true;
         task.status = 'failed';
         if (task.timeoutHandle !== undefined)
@@ -962,7 +1031,7 @@ export class BackgroundTaskRegistry {
         if (surviveReload && reloadLease === undefined) {
             throw new ReloadSurvivalError('pi_bg_reload_owner_unavailable', 'no successfully bound same-process reload owner activation is available');
         }
-        const admission = this.beginTaskAdmission('a background task');
+        const admission = this.beginTaskAdmission('a background task', ctx.sessionId);
         try {
             if (surviveReload && reloadLease !== undefined) {
                 return await this.startReloadableTaskAdmitted(ctx, command, options, admission, reloadLease);
@@ -1114,7 +1183,10 @@ export class BackgroundTaskRegistry {
                     this.reloadShellOwner.releaseExecution(lease, execution);
                 }
             }
-            this.tasks.delete(task.id);
+            if (this.tasks.get(task.id) === task) {
+                this.tasks.delete(task.id);
+                this.historyIncompleteReasons.add('admission_rolled_back');
+            }
             if (execution === undefined) {
                 const removals = await Promise.allSettled([
                     rm(outputAbsPath, { force: true }),
@@ -2491,6 +2563,7 @@ export class BackgroundTaskRegistry {
         ]
             .filter(Boolean)
             .join('\n');
+        task.notificationInFlight = true;
         try {
             this.sendCompletionNotification({
                 customType: 'background-task-notification',
@@ -2502,6 +2575,9 @@ export class BackgroundTaskRegistry {
         catch (error) {
             task.notified = false;
             throw new Error(`Failed to send background task notification for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        finally {
+            task.notificationInFlight = false;
         }
     }
     async finalizeTask(task, status, exitCode, signal, error) {
@@ -2603,6 +2679,7 @@ export class BackgroundTaskRegistry {
                 this.abandonTerminalPublication(task, 'retention_limit');
             }
             this.tasks.delete(task.id);
+            this.historyIncompleteReasons.add('history_pruned');
         }
     }
 }

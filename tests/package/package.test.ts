@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
@@ -28,6 +29,15 @@ function record(value: unknown, label: string): Record<string, unknown> {
 }
 
 void describe('package', () => {
+  void it('ships the work-status capability in the compiled runtime', () => {
+    const result = spawnSync('node', ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      const { BG_EXTENSION_CAPABILITIES } = await import('./dist/src/core/extension-api.js');
+      assert.equal(BG_EXTENSION_CAPABILITIES.work_status, true);
+    `], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  });
+
   void it('describes the private process-only fork', async () => {
     const manifest = record(
       JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as unknown,
