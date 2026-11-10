@@ -2719,7 +2719,8 @@ export class BackgroundTaskRegistry {
         if (this.tasks.size <= this.maxRecentTasks)
             return;
         const removable = [...this.tasks.values()]
-            .filter((task) => task.status !== 'running' && task.terminalEmitInFlight !== true && !task.notificationDeferred)
+            .filter((task) => task.status !== 'running' && task.terminalEmitInFlight !== true
+            && (!task.notifyOnCompletion || (task.notified && task.notificationInFlight !== true)))
             .sort((a, b) => (a.endTime ?? a.startTime) - (b.endTime ?? b.startTime));
         while (this.tasks.size > this.maxRecentTasks && removable.length > 0) {
             const task = removable.shift();

@@ -2535,6 +2535,26 @@ void describe('BackgroundTaskRegistry', () => {
 });
 
 describe('collected completion acknowledgement', () => {
+  void it('retains a newly failed task behind deferred notices under retention pressure', async () => {
+    let idle = false;
+    const h = await createHarness({ maxRecentTasks: 1, canSendCompletionNotification: () => idle });
+    try {
+      const first = await h.registry.startTask(h.ctx, 'printf first', { triggerOnCompletion: true });
+      lastSpawn(h).child.close(0);
+      await waitFor(() => first.notificationDeferred === true);
+      const failure = await h.registry.startTask(h.ctx, 'printf failure', { triggerOnCompletion: true });
+      lastSpawn(h).child.close(7);
+      await waitFor(() => failure.notificationDeferred === true);
+      assert.ok(h.registry.allTasks().some((task) => task.id === failure.id), 'retention must preserve the newly terminal uncollected failure');
+      idle = true;
+      await h.registry.flushCompletionNotifications();
+      assert.deepEqual(h.notifications.map(({ message, options }) => ({ id: message.details.id, trigger: options.triggerTurn })), [
+        { id: first.id, trigger: true }, { id: failure.id, trigger: true },
+      ]);
+      assert.equal(h.registry.allTasks().length, 1, 'delivered notices restore ordinary retention');
+    } finally { await cleanup(h.root); }
+  });
+
   void it('retains reload notification ownership until deferred delivery completes', async () => {
     let idle = false;
     const hub = createReloadShellOwnerHubForTests({ handoffTimeoutMs: 1000 });
