@@ -195,6 +195,7 @@ export type CompletionNotificationSender = (
 export interface BackgroundTaskRegistryOptions {
   onChange?: () => void;
   sendCompletionNotification: CompletionNotificationSender;
+  canSendCompletionNotification?: () => boolean;
   publishTerminal?: (task: BgTaskSnapshot) => void;
   spawn?: BackgroundTaskSpawn;
   killProcess?: KillProcessFn;
@@ -764,6 +765,7 @@ export class BackgroundTaskRegistry {
   private readonly logger: Pick<Console, 'error'>;
   private readonly onChange: () => void;
   private readonly sendCompletionNotification: CompletionNotificationSender;
+  private readonly canSendCompletionNotification: () => boolean;
   private readonly publishTerminalSnapshot: (task: BgTaskSnapshot) => void;
   private readonly posixProcessGroupKillStates = new WeakMap<BgTask, PosixProcessGroupKillState>();
   private readonly windowsKillStates = new WeakMap<BgTask, WindowsKillState>();
@@ -808,6 +810,7 @@ export class BackgroundTaskRegistry {
     this.logger = options.logger ?? console;
     this.onChange = options.onChange ?? noopOnChange;
     this.sendCompletionNotification = options.sendCompletionNotification;
+    this.canSendCompletionNotification = options.canSendCompletionNotification ?? (() => true);
     this.publishTerminalSnapshot = options.publishTerminal ?? noopOnChange;
     this.reloadShellOwner = options.reloadShellOwner;
   }
@@ -1017,7 +1020,7 @@ export class BackgroundTaskRegistry {
           ? 'pending'
           : task.notified
             ? 'delivered'
-            : task.status === 'running'
+            : task.status === 'running' || task.notificationDeferred
               ? 'pending'
               : 'unknown';
       return {
@@ -1453,6 +1456,7 @@ export class BackgroundTaskRegistry {
       pid: undefined,
       bytesWritten: 0,
       isAgent: false,
+      ownerSessionId: ctx.sessionId,
       surviveReload: true,
       notified: false,
       notifyOnCompletion: options.notifyOnCompletion ?? true,
@@ -1663,6 +1667,7 @@ export class BackgroundTaskRegistry {
       pid: undefined,
       bytesWritten: 0,
       isAgent,
+      ownerSessionId: ctx.sessionId,
       surviveReload: false,
       notified: false,
       notifyOnCompletion: options.notifyOnCompletion ?? true,
@@ -2761,6 +2766,7 @@ export class BackgroundTaskRegistry {
   private async deliverReloadTerminal(
     execution: ReloadableShellExecutionV1,
     lease: ReloadShellActivationLeaseV1,
+    triggerTurn?: boolean,
   ): Promise<void> {
     const task = execution.task;
     if (task.reloadHostDeliveryInFlight || task.reloadHostDeliverySettled) {
@@ -2787,7 +2793,7 @@ export class BackgroundTaskRegistry {
         const token = execution.beginNotification(lease);
         if (token !== undefined) {
           try {
-            this.notifyCompletion(task);
+            this.notifyCompletion(task, triggerTurn ?? task.triggerOnCompletion);
             execution.finishNotification(token, task.notified);
           } catch (error) {
             execution.finishNotification(token, false);
@@ -2796,8 +2802,8 @@ export class BackgroundTaskRegistry {
         }
       }
       if (!this.ownsReloadExecution(execution, lease)) return;
-      task.reloadHostNotificationSettled = true;
-      task.reloadHostDeliverySettled = true;
+      task.reloadHostNotificationSettled = !task.notificationDeferred;
+      task.reloadHostDeliverySettled = !task.notificationDeferred;
       try {
         await this.writeMetadata(task);
       } catch (error) {
@@ -3078,8 +3084,47 @@ export class BackgroundTaskRegistry {
     task.terminalPublishRetryHandle.unref();
   }
 
-  private notifyCompletion(task: BgTask): void {
+  async acknowledgeCompletion(taskId: string, sessionId: string): Promise<BgTaskSnapshot> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new Error(`Unknown background task ${taskId}`);
+    if (!sessionId || task.ownerSessionId !== sessionId) throw new Error('Background task owner does not match acknowledgement');
+    if (task.status === 'running') throw new Error('Cannot acknowledge a running background task');
+    if (task.reloadExecution) {
+      const lease = this.reloadShellLease;
+      if (!lease || !this.ownsReloadExecution(task.reloadExecution, lease)) throw new Error('Background task reload owner is stale');
+      await this.deliverReloadTerminal(task.reloadExecution, lease, false);
+    } else {
+      const deliveryGate = await this.waitForTerminalPublicationGate(task);
+      if (deliveryGate.kind === 'rejected') throw new Error('Background task terminal publication gate rejected acknowledgement', { cause: deliveryGate.error });
+      this.notifyCompletion(task, false);
+      await this.writeMetadata(task);
+    }
+    this.onChange();
+    return this.snapshot(task);
+  }
+
+  async flushCompletionNotifications(): Promise<void> {
+    for (const task of this.tasks.values()) {
+      if (!task.notificationDeferred) continue;
+      if (task.reloadExecution) {
+        const lease = this.reloadShellLease;
+        if (lease && this.ownsReloadExecution(task.reloadExecution, lease)) await this.deliverReloadTerminal(task.reloadExecution, lease);
+      } else {
+        this.notifyCompletion(task);
+        await this.writeMetadata(task);
+      }
+    }
+    this.onChange();
+    this.pruneOldTasks();
+  }
+
+  private notifyCompletion(task: BgTask, triggerTurn = task.triggerOnCompletion): void {
     if (!task.notifyOnCompletion || task.notified || this.shuttingDown) return;
+    if (triggerTurn && !this.canSendCompletionNotification()) {
+      task.notificationDeferred = true;
+      return;
+    }
+    task.notificationDeferred = false;
     task.notified = true;
     const exit =
       task.exitCode === undefined ? '' : `\n  <exit-code>${String(task.exitCode)}</exit-code>`;
@@ -3111,7 +3156,7 @@ export class BackgroundTaskRegistry {
           display: true,
           details: snapshot(task),
         },
-        { deliverAs: 'followUp', triggerTurn: task.triggerOnCompletion },
+        { deliverAs: 'followUp', triggerTurn },
       );
     } catch (error) {
       task.notified = false;
@@ -3225,7 +3270,7 @@ export class BackgroundTaskRegistry {
   private pruneOldTasks(): void {
     if (this.tasks.size <= this.maxRecentTasks) return;
     const removable = [...this.tasks.values()]
-      .filter((task) => task.status !== 'running' && task.terminalEmitInFlight !== true)
+      .filter((task) => task.status !== 'running' && task.terminalEmitInFlight !== true && !task.notificationDeferred)
       .sort((a, b) => (a.endTime ?? a.startTime) - (b.endTime ?? b.startTime));
     while (this.tasks.size > this.maxRecentTasks && removable.length > 0) {
       const task = removable.shift();

@@ -38,6 +38,7 @@ export type BackgroundTaskExtensionOperation =
   | 'status'
   | 'work-status'
   | 'logs'
+  | 'acknowledge'
   | 'kill';
 
 export interface BackgroundTaskExtensionCapabilities {
@@ -47,6 +48,7 @@ export interface BackgroundTaskExtensionCapabilities {
   run_completion_trigger: boolean;
   status: boolean;
   work_status: boolean;
+  completion_acknowledgement: boolean;
   logs: boolean;
   logs_bounded: boolean;
   kill: boolean;
@@ -59,6 +61,7 @@ export const BG_EXTENSION_CAPABILITIES: BackgroundTaskExtensionCapabilities = Ob
   run_completion_trigger: true,
   status: true,
   work_status: true,
+  completion_acknowledgement: true,
   logs: true,
   logs_bounded: true,
   kill: true,
@@ -91,12 +94,18 @@ export interface BackgroundTaskExtensionKillPayload {
   taskId: string;
 }
 
+export interface BackgroundTaskExtensionAcknowledgementPayload {
+  taskId: string;
+  sessionId: string;
+}
+
 export type BackgroundTaskExtensionPayload =
   | Record<PropertyKey, never>
   | BackgroundTaskExtensionRunPayload
   | BackgroundTaskExtensionStatusPayload
   | BackgroundTaskExtensionWorkStatusPayload
   | BackgroundTaskExtensionLogsPayload
+  | BackgroundTaskExtensionAcknowledgementPayload
   | BackgroundTaskExtensionKillPayload;
 
 export interface BackgroundTaskExtensionRequest {
@@ -112,6 +121,7 @@ export type BackgroundTaskExtensionResult =
   | BgTaskSnapshot
   | { tasks: BgTaskSnapshot[] }
   | (BgLogsDetails & { text: string })
+  | { task: BgTaskSnapshot }
   | { task: BgTaskSnapshot; message: string };
 
 export type BackgroundTaskExtensionResponse =
@@ -209,11 +219,12 @@ function requireOperation(value: unknown, label: string): BackgroundTaskExtensio
     value === 'status' ||
     value === 'work-status' ||
     value === 'logs' ||
+    value === 'acknowledge' ||
     value === 'kill'
   ) {
     return value;
   }
-  throw new Error(`${label} must be one of capabilities, run, status, work-status, logs, kill`);
+  throw new Error(`${label} must be one of capabilities, run, status, work-status, logs, acknowledge, kill`);
 }
 
 function operationEcho(value: unknown): string {
@@ -288,6 +299,15 @@ function parseLogsPayload(value: unknown): BackgroundTaskExtensionLogsPayload {
   return out;
 }
 
+function parseAcknowledgementPayload(value: unknown): BackgroundTaskExtensionAcknowledgementPayload {
+  const payload = requireRecord(value, 'acknowledge.payload');
+  assertClosed(payload, ['taskId', 'sessionId'], 'acknowledge.payload');
+  return {
+    taskId: requireNonEmptyString(payload['taskId'], 'acknowledge.payload.taskId'),
+    sessionId: requireNonEmptyString(payload['sessionId'], 'acknowledge.payload.sessionId'),
+  };
+}
+
 function parseKillPayload(value: unknown): BackgroundTaskExtensionKillPayload {
   const payload = requireRecord(value, 'kill.payload');
   assertClosed(payload, ['taskId'], 'kill.payload');
@@ -309,6 +329,8 @@ function parsePayload(
       return parseWorkStatusPayload(value);
     case 'logs':
       return parseLogsPayload(value);
+    case 'acknowledge':
+      return parseAcknowledgementPayload(value);
     case 'kill':
       return parseKillPayload(value);
   }
@@ -435,6 +457,10 @@ function workStatusPayload(
 
 function logsPayload(value: BackgroundTaskExtensionPayload): BackgroundTaskExtensionLogsPayload {
   return value as BackgroundTaskExtensionLogsPayload;
+}
+
+function acknowledgementPayload(value: BackgroundTaskExtensionPayload): BackgroundTaskExtensionAcknowledgementPayload {
+  return value as BackgroundTaskExtensionAcknowledgementPayload;
 }
 
 function killPayload(value: BackgroundTaskExtensionPayload): BackgroundTaskExtensionKillPayload {
@@ -583,6 +609,13 @@ class InstalledBackgroundTaskExtensionService implements BackgroundTaskExtension
           payload.tail ?? true,
         );
         return { ...logs.details, text: logs.text };
+      }
+      case 'acknowledge': {
+        const payload = acknowledgementPayload(request.payload);
+        if (!ctx.sessionId || payload.sessionId !== ctx.sessionId) {
+          throw new Error('acknowledge sessionId does not match current owner');
+        }
+        return { task: await this.registry.acknowledgeCompletion(payload.taskId, ctx.sessionId) };
       }
       case 'kill': {
         const payload = killPayload(request.payload);

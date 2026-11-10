@@ -22,6 +22,7 @@ export const BG_EXTENSION_CAPABILITIES = Object.freeze({
     run_completion_trigger: true,
     status: true,
     work_status: true,
+    completion_acknowledgement: true,
     logs: true,
     logs_bounded: true,
     kill: true,
@@ -67,10 +68,11 @@ function requireOperation(value, label) {
         value === 'status' ||
         value === 'work-status' ||
         value === 'logs' ||
+        value === 'acknowledge' ||
         value === 'kill') {
         return value;
     }
-    throw new Error(`${label} must be one of capabilities, run, status, work-status, logs, kill`);
+    throw new Error(`${label} must be one of capabilities, run, status, work-status, logs, acknowledge, kill`);
 }
 function operationEcho(value) {
     return typeof value === 'string' && value.length > 0 ? value : 'malformed';
@@ -125,6 +127,14 @@ function parseLogsPayload(value) {
         out.tail = requireBoolean(payload['tail'], 'logs.payload.tail');
     return out;
 }
+function parseAcknowledgementPayload(value) {
+    const payload = requireRecord(value, 'acknowledge.payload');
+    assertClosed(payload, ['taskId', 'sessionId'], 'acknowledge.payload');
+    return {
+        taskId: requireNonEmptyString(payload['taskId'], 'acknowledge.payload.taskId'),
+        sessionId: requireNonEmptyString(payload['sessionId'], 'acknowledge.payload.sessionId'),
+    };
+}
 function parseKillPayload(value) {
     const payload = requireRecord(value, 'kill.payload');
     assertClosed(payload, ['taskId'], 'kill.payload');
@@ -142,6 +152,8 @@ function parsePayload(operation, value) {
             return parseWorkStatusPayload(value);
         case 'logs':
             return parseLogsPayload(value);
+        case 'acknowledge':
+            return parseAcknowledgementPayload(value);
         case 'kill':
             return parseKillPayload(value);
     }
@@ -246,6 +258,9 @@ function workStatusPayload(value) {
     return value;
 }
 function logsPayload(value) {
+    return value;
+}
+function acknowledgementPayload(value) {
     return value;
 }
 function killPayload(value) {
@@ -377,6 +392,13 @@ class InstalledBackgroundTaskExtensionService {
                 const task = this.registry.resolveTask(payload.taskId);
                 const logs = await this.registry.getTaskLogs(task, normalizeMaxBytes(payload.maxBytes, DEFAULT_LOG_BYTES), payload.tail ?? true);
                 return { ...logs.details, text: logs.text };
+            }
+            case 'acknowledge': {
+                const payload = acknowledgementPayload(request.payload);
+                if (!ctx.sessionId || payload.sessionId !== ctx.sessionId) {
+                    throw new Error('acknowledge sessionId does not match current owner');
+                }
+                return { task: await this.registry.acknowledgeCompletion(payload.taskId, ctx.sessionId) };
             }
             case 'kill': {
                 const payload = killPayload(request.payload);

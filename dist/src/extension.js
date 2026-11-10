@@ -105,6 +105,7 @@ export default async function backgroundTasksExtension(pi) {
         sendCompletionNotification: (message, options) => {
             pi.sendMessage(message, options);
         },
+        canSendCompletionNotification: () => currentCtx?.isIdle() ?? false,
         publishTerminal: (task) => {
             eventService.publishTerminal(task);
         },
@@ -231,6 +232,13 @@ export default async function backgroundTasksExtension(pi) {
             }
             throw error;
         }
+    });
+    pi.on('agent_settled', async (_event, ctx) => {
+        if (disposed)
+            return;
+        currentCtx = ctx;
+        currentRegistryCtx = registryContext(ctx);
+        await registry.flushCompletionNotifications();
     });
     function unseenFinishedTasks() {
         return registry

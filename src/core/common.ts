@@ -266,6 +266,8 @@ export interface BgTaskSnapshot {
 
 export interface BgTask extends Omit<BgTaskSnapshot, 'name'> {
   name: string;
+  ownerSessionId?: string | undefined;
+  notificationDeferred?: boolean | undefined;
   outputAbsPath: string;
   metadataAbsPath: string;
   wrapperAbsPath?: string | undefined;

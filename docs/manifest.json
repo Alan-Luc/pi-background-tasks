@@ -502,7 +502,7 @@
         "id": "command:bg",
         "kind": "command",
         "name": "bg",
-        "source": "src/extension.ts:581"
+        "source": "src/extension.ts:589"
       },
       {
         "availability": "always",
@@ -511,7 +511,7 @@
         "id": "command:bg-clear",
         "kind": "command",
         "name": "bg-clear",
-        "source": "src/extension.ts:624"
+        "source": "src/extension.ts:632"
       },
       {
         "availability": "always",
@@ -520,7 +520,7 @@
         "id": "command:bg-tasks",
         "kind": "command",
         "name": "bg-tasks",
-        "source": "src/extension.ts:616"
+        "source": "src/extension.ts:624"
       },
       {
         "availability": "always",
@@ -529,7 +529,7 @@
         "id": "command:jobs",
         "kind": "command",
         "name": "jobs",
-        "source": "src/extension.ts:658"
+        "source": "src/extension.ts:666"
       },
       {
         "availability": "always",
@@ -538,7 +538,7 @@
         "id": "command:kill",
         "kind": "command",
         "name": "kill",
-        "source": "src/extension.ts:702"
+        "source": "src/extension.ts:710"
       },
       {
         "availability": "always",
@@ -547,7 +547,7 @@
         "id": "command:logs",
         "kind": "command",
         "name": "logs",
-        "source": "src/extension.ts:671"
+        "source": "src/extension.ts:679"
       },
       {
         "availability": "always",
@@ -556,7 +556,7 @@
         "id": "command:tasks",
         "kind": "command",
         "name": "tasks",
-        "source": "src/extension.ts:608"
+        "source": "src/extension.ts:616"
       }
     ],
     "eventbus": [
@@ -572,11 +572,13 @@
         "kind": "eventbus",
         "name": "background-task-v1",
         "operations": [
+          "acknowledge",
           "capabilities",
           "kill",
           "logs",
           "run",
-          "status"
+          "status",
+          "work-status"
         ],
         "source": "src/core/extension-api.ts"
       }
@@ -588,7 +590,7 @@
         "id": "renderer:background-task-notification",
         "kind": "renderer",
         "name": "background-task-notification",
-        "source": "src/extension.ts:477"
+        "source": "src/extension.ts:485"
       }
     ],
     "shortcut": [
@@ -599,7 +601,7 @@
         "id": "shortcut:ctrl+alt+b",
         "kind": "shortcut",
         "name": "ctrl+alt+b",
-        "source": "src/extension.ts:642"
+        "source": "src/extension.ts:650"
       },
       {
         "availability": "always",
@@ -608,7 +610,7 @@
         "id": "shortcut:ctrl+alt+c",
         "kind": "shortcut",
         "name": "ctrl+alt+c",
-        "source": "src/extension.ts:650"
+        "source": "src/extension.ts:658"
       },
       {
         "availability": "dock:shift+down",
@@ -617,7 +619,7 @@
         "id": "shortcut:shift+down",
         "kind": "shortcut",
         "name": "shift+down",
-        "source": "src/extension.ts:633"
+        "source": "src/extension.ts:641"
       }
     ],
     "tool": [
@@ -645,7 +647,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:919"
+        "source": "src/extension.ts:927"
       },
       {
         "availability": "always",
@@ -681,7 +683,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:874"
+        "source": "src/extension.ts:882"
       },
       {
         "availability": "always",
@@ -744,7 +746,7 @@
           ],
           "type": "object"
         },
-        "source": "src/extension.ts:735"
+        "source": "src/extension.ts:743"
       },
       {
         "availability": "always",
@@ -770,7 +772,7 @@
           "required": [],
           "type": "object"
         },
-        "source": "src/extension.ts:843"
+        "source": "src/extension.ts:851"
       }
     ]
   },

@@ -18,19 +18,21 @@ Availability: `always`; available by default: **yes**.
 | Response | `pi-background-tasks:response:v1` | `pi-background-tasks.extension-response.v1` |
 | Terminal | `pi-background-tasks:terminal:v1` | `pi-background-tasks.extension-terminal.v1` |
 
-Operations: `capabilities`, `kill`, `logs`, `run`, `status`.
+Operations: `acknowledge`, `capabilities`, `kill`, `logs`, `run`, `status`, `work-status`.
 
 
 ```json
 {
   "api_version": 1,
+  "completion_acknowledgement": true,
   "kill": true,
   "logs": true,
   "logs_bounded": true,
   "run": true,
   "run_completion_trigger": true,
   "run_is_agent": true,
-  "status": true
+  "status": true,
+  "work_status": true
 }
 ```
 <!-- pi-docs:end name="eventbus-contract" -->

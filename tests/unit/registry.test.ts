@@ -90,6 +90,7 @@ interface SpawnRecord {
 }
 
 interface HarnessOptions {
+  canSendCompletionNotification?: () => boolean;
   platform?: NodeJS.Platform;
   maxRecentTasks?: number;
   maxOutputBytes?: number;
@@ -156,6 +157,8 @@ async function createHarness(options: HarnessOptions = {}) {
         return child;
       }),
   };
+  if (options.canSendCompletionNotification !== undefined)
+    registryOptions.canSendCompletionNotification = options.canSendCompletionNotification;
   if (options.publishTerminal !== undefined)
     registryOptions.publishTerminal = options.publishTerminal;
   if (options.platform !== undefined) registryOptions.platform = options.platform;
@@ -2528,5 +2531,70 @@ void describe('BackgroundTaskRegistry', () => {
     } finally {
       await cleanup(h.root);
     }
+  });
+});
+
+describe('collected completion acknowledgement', () => {
+  void it('retains reload notification ownership until deferred delivery completes', async () => {
+    let idle = false;
+    const hub = createReloadShellOwnerHubForTests({ handoffTimeoutMs: 1000 });
+    const h = await createHarness({ reloadShellOwner: hub, canSendCompletionNotification: () => idle, killGraceMs: 10, stopWaitMs: 200, killProcess: () => true });
+    const claim = hub.beginActivation(makeReloadShellIdentity('registry-test', realpathSync(h.cwd)), 'startup', 'e'.repeat(32));
+    const lease = hub.commitActivation(claim, await h.registry.stageReloadActivation(claim));
+    try {
+      const task = await h.registry.startTask(h.ctx, 'printf survivor', { surviveReload: true, triggerOnCompletion: true });
+      lastSpawn(h).child.close(0);
+      await waitFor(() => task.status === 'completed' && task.notificationDeferred === true && !task.reloadHostDeliveryInFlight);
+      assert.ok(task.reloadExecution, 'deferred notice must retain its reload owner');
+      idle = true;
+      await h.registry.flushCompletionNotifications();
+      await waitFor(() => task.reloadExecution === undefined, 'owner release after delivery');
+      assert.equal(h.notifications.length, 1);
+      assert.equal(h.notifications[0]?.options.triggerTurn, true);
+    } finally {
+      h.registry.releaseReloadActivation(lease);
+      h.registry.setShuttingDown(true);
+      await cleanup(h.root);
+    }
+  });
+
+  for (const exitCode of [0, 7]) {
+    void it(`defers busy delivery and acknowledges collected exit ${exitCode} without a wake`, async () => {
+      const h = await createHarness({ canSendCompletionNotification: () => false });
+      try {
+        const task = await h.registry.startTask(h.ctx, 'printf collected', { triggerOnCompletion: true });
+        lastSpawn(h).child.close(exitCode);
+        await waitFor(() => task.status !== 'running' && task.terminalPublished);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(h.notifications.length, 0, 'busy completion must not enter the SDK follow-up queue');
+        await h.registry.acknowledgeCompletion(task.id, 'registry-test');
+        assert.equal(h.notifications.length, 1);
+        assert.equal(h.notifications[0]?.options.triggerTurn, false);
+        assert.equal(task.notified, true);
+        assert.equal(h.registry.resolveTask(task.id).exitCode, exitCode);
+        await h.registry.acknowledgeCompletion(task.id, 'registry-test');
+        await h.registry.flushCompletionNotifications();
+        assert.equal(h.notifications.length, 1, 'acknowledgement must be idempotent');
+      } finally { await cleanup(h.root); }
+    });
+  }
+
+  void it('wakes for an uncollected failure at settlement without acknowledging another owner', async () => {
+    let idle = false;
+    const h = await createHarness({ canSendCompletionNotification: () => idle });
+    try {
+      const task = await h.registry.startTask(h.ctx, 'printf failure', { triggerOnCompletion: true });
+      lastSpawn(h).child.close(7);
+      await waitFor(() => task.status === 'failed' && task.terminalPublished);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(h.notifications.length, 0);
+      await assert.rejects(h.registry.acknowledgeCompletion(task.id, 'foreign-owner'), /owner/);
+      assert.equal(task.notified, false);
+      idle = true;
+      await h.registry.flushCompletionNotifications();
+      assert.equal(h.notifications.length, 1);
+      assert.equal(h.notifications[0]?.options.triggerTurn, true);
+      assert.equal(h.notifications[0]?.message.details.status, 'failed');
+    } finally { await cleanup(h.root); }
   });
 });

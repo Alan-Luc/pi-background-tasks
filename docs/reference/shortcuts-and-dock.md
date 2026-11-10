@@ -12,9 +12,9 @@ covers_sources: []
 <!-- pi-docs:begin name="shortcut-contracts" generator="scripts/docs/generate.mjs" -->
 | Shortcut | Availability | Default | Description | Provenance |
 | --- | --- | --- | --- | --- |
-| `ctrl+alt+b` | `dock:ctrl+alt+b` | no | Open focused background task manager | `src/extension.ts:642` |
-| `ctrl+alt+c` | `always` | yes | Clear finished background task notices (terminal-dependent fallback for /bg-clear) | `src/extension.ts:650` |
-| `shift+down` | `dock:shift+down` | yes | Open focused background task manager | `src/extension.ts:633` |
+| `ctrl+alt+b` | `dock:ctrl+alt+b` | no | Open focused background task manager | `src/extension.ts:650` |
+| `ctrl+alt+c` | `always` | yes | Clear finished background task notices (terminal-dependent fallback for /bg-clear) | `src/extension.ts:658` |
+| `shift+down` | `dock:shift+down` | yes | Open focused background task manager | `src/extension.ts:641` |
 <!-- pi-docs:end name="shortcut-contracts" -->
 
 `PI_BG_DOCK_SHORTCUT` selects `shift+down` (default), `ctrl+alt+b`, or `off`. Only the selected dock key is registered; with `off`, `/tasks` and `/bg-tasks` remain the fallback.

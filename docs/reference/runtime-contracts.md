@@ -29,18 +29,18 @@ covers_sources: []
 
 | Name | Access | Provenance |
 | --- | --- | --- |
-| `ComSpec` | read | `src/core/common.ts:926`<br>`src/core/common.ts:944` |
-| `path` | read | `src/core/common.ts:842` |
-| `Path` | read | `src/core/common.ts:842` |
-| `PATH` | read | `src/core/common.ts:842`<br>`src/core/common.ts:896`<br>`src/core/pi-launch.ts:425` |
-| `PI_BG_DISABLE_PI_TELEMETRY` | read | `src/core/registry.ts:234` |
+| `ComSpec` | read | `src/core/common.ts:956`<br>`src/core/common.ts:974` |
+| `path` | read | `src/core/common.ts:872` |
+| `Path` | read | `src/core/common.ts:872` |
+| `PATH` | read | `src/core/common.ts:872`<br>`src/core/common.ts:926`<br>`src/core/pi-launch.ts:425` |
+| `PI_BG_DISABLE_PI_TELEMETRY` | read | `src/core/registry.ts:238` |
 | `PI_BG_DOCK_SHORTCUT` | read | `src/core/config.ts:42` |
-| `PI_BG_MAX_OUTPUT_BYTES` | read | `src/core/registry.ts:60` |
-| `PI_BG_POSIX_SHELL` | read | `src/core/common.ts:964` |
-| `PI_BG_POSIX_SHELL_PATH` | read | `src/core/common.ts:974` |
-| `PI_BG_SHELL` | read | `src/core/common.ts:921` |
-| `PI_BG_SHELL_PATH` | read | `src/core/common.ts:922` |
-| `SHELL` | read | `src/core/common.ts:981` |
+| `PI_BG_MAX_OUTPUT_BYTES` | read | `src/core/registry.ts:62` |
+| `PI_BG_POSIX_SHELL` | read | `src/core/common.ts:994` |
+| `PI_BG_POSIX_SHELL_PATH` | read | `src/core/common.ts:1004` |
+| `PI_BG_SHELL` | read | `src/core/common.ts:951` |
+| `PI_BG_SHELL_PATH` | read | `src/core/common.ts:952` |
+| `SHELL` | read | `src/core/common.ts:1011` |
 | `SystemRoot` | read | `src/core/windows-taskkill.ts:96` |
 | `WINDIR` | read | `src/core/windows-taskkill.ts:101` |
 
@@ -48,19 +48,20 @@ covers_sources: []
 
 | Kind | Path/artifact | Provenance |
 | --- | --- | --- |
-| directory | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/` | `src/core/registry.ts:1179` |
-| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.json` | `src/core/registry.ts:1355` |
-| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.output` | `src/core/registry.ts:1354` |
+| directory | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/` | `src/core/registry.ts:1250` |
+| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.json` | `src/core/registry.ts:1429` |
+| task-file | `<canonical-tmpdir>/pi-background-tasks-<session-id>-<pid>-<random>/<task-id>.output` | `src/core/registry.ts:1428` |
 
 ### Schema identifiers
 
 | Schema | Provenance |
 | --- | --- |
-| `pi-background-tasks.extension-request.v1` | `src/core/extension-api.ts:15` |
-| `pi-background-tasks.extension-response.v1` | `src/core/extension-api.ts:16` |
-| `pi-background-tasks.extension-terminal.v1` | `src/core/extension-api.ts:17` |
+| `pi-background-tasks.extension-request.v1` | `src/core/extension-api.ts:16` |
+| `pi-background-tasks.extension-response.v1` | `src/core/extension-api.ts:17` |
+| `pi-background-tasks.extension-terminal.v1` | `src/core/extension-api.ts:18` |
 | `pi-background-tasks.reload-shell-owner.v1` | `src/core/reload-shell-owner.ts:36` |
 | `pi-background-tasks.reload-shell.v1` | `src/core/reload-shell-owner.ts:996` |
+| `pi-background-tasks.work-status.v1` | `src/core/registry.ts:1038` |
 
 ### Status vocabularies
 

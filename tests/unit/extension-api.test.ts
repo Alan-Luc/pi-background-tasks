@@ -146,6 +146,7 @@ interface ProtocolHarness {
 async function createProtocolHarness(
   options: {
     onSpawn?: ((child: FakeChild) => void) | undefined;
+    canSendCompletionNotification?: (() => boolean) | undefined;
     onNotification?: ((bus: MemoryEventBus) => void) | undefined;
     maxRecentTasks?: number | undefined;
     reloadShellOwner?: ReloadShellOwnerHubV1 | undefined;
@@ -210,6 +211,7 @@ async function createProtocolHarness(
     makeTaskId: () => `bproto${String(++idSeq).padStart(3, '0')}`,
     ...(options.reloadShellOwner === undefined ? {} : { reloadShellOwner: options.reloadShellOwner }),
     sendCompletionNotification: () => options.onNotification?.(bus),
+    ...(options.canSendCompletionNotification === undefined ? {} : { canSendCompletionNotification: options.canSendCompletionNotification }),
     ...(options.maxRecentTasks === undefined
       ? {}
       : { maxRecentTasks: options.maxRecentTasks }),
@@ -404,6 +406,28 @@ async function waitForTerminal(
 }
 
 void describe('background EventBus protocol', () => {
+  void it('acknowledges only an exact terminal task owned by the current session', async () => {
+    const h = await createProtocolHarness({ canSendCompletionNotification: () => false });
+    try {
+      const task = await h.registry.startTask(h.ctx, 'printf acknowledgement', { triggerOnCompletion: true });
+      const acknowledge = (requestId: string, taskId: string, sessionId: string) => emitRequest(h.bus, {
+        schema_version: BG_REQUEST_SCHEMA, request_id: requestId, operation: 'acknowledge', payload: { taskId, sessionId },
+      });
+      assert.equal((await acknowledge('running-ack', task.id, 'extension-api-protocol-unit')).ok, false);
+      h.children[0]?.close(7);
+      await waitForCondition(() => task.status === 'failed' && task.terminalPublished, 'terminal acknowledgement task');
+      assert.equal((await acknowledge('foreign-ack', task.id, 'foreign-owner')).ok, false);
+      assert.equal((await acknowledge('unknown-ack', 'unknown-task', 'extension-api-protocol-unit')).ok, false);
+      assert.equal((await acknowledge('prefix-ack', task.id.slice(0, -1), 'extension-api-protocol-unit')).ok, false);
+      assert.equal(task.notified, false);
+      const accepted = await acknowledge('valid-ack', task.id, 'extension-api-protocol-unit');
+      assert.equal(accepted.ok, true, 'same-owner terminal acknowledgement must be supported');
+      assert.equal(task.notified, true);
+      assert.equal(task.exitCode, 7);
+      assert.equal((await acknowledge('repeat-ack', task.id, 'extension-api-protocol-unit')).ok, true);
+      assert.equal(h.registry.allTasks().length, 1);
+    } finally { h.close(); await rm(h.root, { recursive: true, force: true }); }
+  });
   void it('handshakes capabilities and rejects malformed, duplicate, and unavailable requests', async () => {
     const h = await createHarness();
     try {
@@ -433,7 +457,7 @@ void describe('background EventBus protocol', () => {
       });
       assert.equal(unknown.ok, false);
       assert.equal(unknown.operation, 'bogus');
-      assert.match(unknown.ok ? '' : unknown.error, /capabilities, run, status, work-status, logs, kill/u);
+      assert.match(unknown.ok ? '' : unknown.error, /capabilities, run, status, work-status, logs, acknowledge, kill/u);
 
       const extra = await emitRequest(h.bus, {
         schema_version: BG_REQUEST_SCHEMA,
@@ -502,6 +526,7 @@ void describe('background EventBus protocol', () => {
       assert.equal(h.spawnCount(), 0);
       assert.deepEqual(Object.keys(BG_EXTENSION_CAPABILITIES).sort(), [
         'api_version',
+        'completion_acknowledgement',
         'kill',
         'logs',
         'logs_bounded',

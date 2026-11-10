@@ -47,6 +47,8 @@ The default dock shortcut is **Shift↓**. `PI_BG_DOCK_SHORTCUT=ctrl+alt+b` sele
 
 `bg_run` starts an ordinary shell task and returns its task id immediately. Completion notification is the normal wake-up path; `bg_status` and `bg_logs` are point-in-time inspection tools, not polling primitives. Use `bg_kill` to stop a running task.
 
+While the agent is busy, triggering completion notices wait until settlement. Valid verification collection acknowledges only its same-session task and delivers its notice without another model request. Uncollected failures and cancelled tasks retain their wake-up notices.
+
 ## Development checks
 
 ```bash
